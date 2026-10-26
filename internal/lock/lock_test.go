@@ -52,7 +52,7 @@ func TestDeterministicRoundTrip(t *testing.T) {
 	if _, ok, err := Read(dir, "none.json"); err != nil || ok {
 		t.Fatal("missing lock reported present")
 	}
-	for _, bad := range []string{`{}`, `{"lockVersion":2,"packages":[]}`, `{"lockVersion":1,"packages":[{"resource":"x"}]}`, `{"lockVersion":1,"packages":[],"extra":1}`} {
+	for _, bad := range []string{`{}`, `{"lockVersion":2,"packages":[]}`, `{"lockVersion":1,"packages":[{"resource":"x","kind":"vcs"}]}`, `{"lockVersion":1,"packages":[],"extra":1}`} {
 		if _, err := Parse([]byte(bad)); err == nil {
 			t.Errorf("Parse(%s) accepted", bad)
 		}

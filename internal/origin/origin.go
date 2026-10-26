@@ -206,6 +206,10 @@ func parseVCS(res, vcs, tail string) (*Origin, error) {
 		}
 		o.Path = filepath.ToSlash(filepath.Clean(p))
 		o.Source = o.Path
+		if vcs == "svn" {
+			// svn addresses a local repository only by URL.
+			o.Source = "file://" + o.Path
+		}
 		return o, nil
 	}
 	host, p, _ := strings.Cut(tail, "/")

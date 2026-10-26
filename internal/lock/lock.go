@@ -32,8 +32,8 @@ type Entry struct {
 	Resource  string `json:"resource"`
 	Kind      string `json:"kind"`
 	Publisher string `json:"publisher,omitempty"`
-	Name      string `json:"name"`
-	Version   string `json:"version"`
+	Name      string `json:"name,omitempty"`
+	Version   string `json:"version,omitempty"`
 	// VCS, Source, Tag and Revision describe where a KindVCS tree came from;
 	// Source is also the URL or path of an archive or local directory.
 	VCS      string `json:"vcs,omitempty"`
@@ -42,6 +42,9 @@ type Entry struct {
 	Revision string `json:"revision,omitempty"`
 	// SHA256 is the tree digest of an exported tree or the file digest of a .kpar.
 	SHA256 string `json:"sha256,omitempty"`
+	// MetaGenerated records that the tag tree had no .meta.json and the
+	// installed copy carries one this tool generated (excluded from SHA256).
+	MetaGenerated bool `json:"metaGenerated,omitempty"`
 	// Usage lists the canonical resources this package's own .project.json uses.
 	Usage []string `json:"usage,omitempty"`
 }
@@ -112,8 +115,11 @@ func Parse(data []byte) (*Lock, error) {
 	}
 	seen := map[string]bool{}
 	for i, e := range l.Packages {
-		if e.Resource == "" || e.Name == "" || e.Version == "" || e.Kind == "" {
-			return nil, fmt.Errorf("lock: packages[%d] lacks resource, kind, name or version", i)
+		if e.Resource == "" || e.Kind == "" {
+			return nil, fmt.Errorf("lock: packages[%d] lacks resource or kind", i)
+		}
+		if e.Kind != KindStandard && (e.Name == "" || e.Version == "") {
+			return nil, fmt.Errorf("lock: packages[%d] (%s) lacks name or version", i, e.Resource)
 		}
 		if seen[e.Resource] {
 			return nil, fmt.Errorf("lock: %s is locked twice", e.Resource)

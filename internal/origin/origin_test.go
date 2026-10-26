@@ -21,6 +21,7 @@ func TestParseCanonical(t *testing.T) {
 		{"pkg:svn/svn.example.org/repos/widgets@1.0.0", VCS, "svn", "svn.example.org", "repos/widgets", "", "1.0.0", "https://svn.example.org/repos/widgets", "pkg:svn/svn.example.org/repos/widgets", "pkg:svn/svn.example.org/repos/widgets@1.0.0"},
 		{"pkg:hg/hg.example.org/widgets", VCS, "hg", "hg.example.org", "widgets", "", "", "https://hg.example.org/widgets", "pkg:hg/hg.example.org/widgets", "pkg:hg/hg.example.org/widgets"},
 		{"pkg:git//srv/git/widgets.git@1.0.0", VCS, "git", "", "/srv/git/widgets.git", "", "1.0.0", "/srv/git/widgets.git", "pkg:git//srv/git/widgets.git", "pkg:git//srv/git/widgets.git@1.0.0"},
+		{"pkg:svn//srv/svn/widgets@1.0.0", VCS, "svn", "", "/srv/svn/widgets", "", "1.0.0", "file:///srv/svn/widgets", "pkg:svn//srv/svn/widgets", "pkg:svn//srv/svn/widgets@1.0.0"},
 		{"pkg:hg//srv/hg/widgets@1.0.0#core", VCS, "hg", "", "/srv/hg/widgets", "core", "1.0.0", "/srv/hg/widgets", "pkg:hg//srv/hg/widgets#core", "pkg:hg//srv/hg/widgets@1.0.0#core"},
 		{"https://github.com/acme/widgets.git@1.0.0", VCS, "git", "github.com", "acme/widgets", "", "1.0.0", "https://github.com/acme/widgets.git", "pkg:git/github.com/acme/widgets", "pkg:git/github.com/acme/widgets@1.0.0"},
 		{"https://GitHub.com/acme/widgets", VCS, "git", "github.com", "acme/widgets", "", "", "https://GitHub.com/acme/widgets", "pkg:git/github.com/acme/widgets", "pkg:git/github.com/acme/widgets"},

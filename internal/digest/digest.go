@@ -28,7 +28,11 @@ var metadataDirs = map[string]bool{".git": true, ".hg": true, ".svn": true}
 
 // Tree returns the hex SHA-256 of the directory as described in the package
 // documentation.
-func Tree(root string) (string, error) {
+func Tree(root string) (string, error) { return TreeExcept(root) }
+
+// TreeExcept is Tree with the named top-level files left out, for a tree
+// whose .meta.json was added after it was hashed.
+func TreeExcept(root string, skipTopLevel ...string) (string, error) {
 	var paths []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -43,6 +47,11 @@ func Tree(root string) (string, error) {
 		rel, err := filepath.Rel(root, p)
 		if err != nil {
 			return err
+		}
+		for _, skip := range skipTopLevel {
+			if rel == skip {
+				return nil
+			}
 		}
 		if d.Type()&fs.ModeSymlink != 0 {
 			return fmt.Errorf("%s: symbolic links are not allowed in a package tree", rel)
