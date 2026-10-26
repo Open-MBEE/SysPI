@@ -7,15 +7,16 @@
 //
 //	pkg:<vcs>/<host>/<path>[@<version>][#<subpath>]
 //
-// with <vcs> one of git, svn or hg. pkg:git is the registered Package-URL
-// type `git` (ECMA-427; purl-spec types/git-definition.json: namespace =
-// host, name = repository path, version = a git reference, subpath
-// allowed) with <version> restricted to a tag naming a semantic version — a
-// commit sha is refused. pkg:svn, pkg:hg and pkg:sysand are not registered
-// types and use the same shape by analogy. The grammar is hand-parsed here;
-// this package makes no attempt to be a general purl parser. Plain clone URLs
-// (https://host/path.git@1.0.0, ssh://git@host/path@1.0.0, git@host:path@1.0.0,
-// file:///path@1.0.0) are accepted and normalised to the pkg:<vcs> form.
+// with <vcs> one of git, svn or hg; see docs/packages.md for the grammar.
+//
+// pkg:git is the registered Package-URL type git (ECMA-427) with <version>
+// restricted to a tag naming a semantic version; a commit sha is refused.
+//
+// pkg:svn, pkg:hg and pkg:sysand are not registered types and use the same
+// shape by analogy. Everything is hand-parsed; this is not a purl parser.
+//
+// Plain clone URLs (https://host/path.git@1.0.0, ssh://git@host/path@1.0.0,
+// git@host:path@1.0.0, file:///path@1.0.0) are normalised to the pkg form.
 package origin
 
 import (

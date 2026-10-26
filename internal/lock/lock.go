@@ -175,11 +175,8 @@ func Read(dir, file string) (l *Lock, ok bool, err error) {
 	return l, err == nil, err
 }
 
-// Write writes the lock to <dir>/<file> only when its bytes changed, and
-// reports whether it wrote. The bytes land in a temporary file first and
-// are renamed into place, so a failure leaves the previous lock intact. A
-// lock that is a symlink is written through: its target is replaced and
-// the link kept.
+// Write writes the lock to <dir>/<file> only when its bytes changed and reports
+// whether it wrote: a temp file renamed into place, written through a symlink.
 func (l *Lock) Write(dir, file string) (bool, error) {
 	data := l.Marshal()
 	p := filepath.Join(dir, file)
