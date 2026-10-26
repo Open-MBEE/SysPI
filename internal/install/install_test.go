@@ -76,6 +76,10 @@ func fixture(t *testing.T) (widgets, base string) {
 	os.Remove(filepath.Join(w, ".meta.json"))
 	git(t, w, "commit", "-q", "-am", "mismatch")
 	git(t, w, "tag", "v1.2.0")
+	// Build metadata must agree exactly.
+	write(t, w, ".project.json", `{"name":"widgets","publisher":"acme","version":"1.3.0+build.2"}`+"\n")
+	git(t, w, "commit", "-q", "-am", "build metadata")
+	git(t, w, "tag", "v1.3.0+build.1")
 	widgets = filepath.Join(root, "widgets.git")
 	git(t, root, "clone", "-q", "--bare", w, widgets)
 
@@ -232,7 +236,8 @@ func TestRefusals(t *testing.T) {
 	}{
 		{"missing project at tag", project.Usage{Resource: bres + "@3.0.0"}, "is not a package: no .project.json"},
 		{"tag/version mismatch", project.Usage{Resource: wres + "@1.2.0"}, `carries version 1.2.0 but its .project.json says "version": "1.1.0"`},
-		{"no matching version", project.Usage{Resource: wres, VersionConstraint: "^5.0.0"}, "no version satisfies \"^5.0.0\"; available: v1.0.0, v1.1.0, v1.2.0"},
+		{"no matching version", project.Usage{Resource: wres, VersionConstraint: "^5.0.0"}, "no version satisfies \"^5.0.0\"; available: v1.0.0, v1.1.0, v1.2.0, v1.3.0+build.1"},
+		{"build metadata mismatch", project.Usage{Resource: wres, VersionConstraint: "~1.3.0"}, `carries version 1.3.0+build.1 but its .project.json says "version": "1.3.0+build.2"`},
 		{"provider type", project.Usage{Resource: "pkg:github/acme/widgets@1.0.0"}, "write pkg:git/<host>/<path>"},
 		{"unsupported vcs", project.Usage{Resource: "pkg:cvs/host/repo@1.0.0"}, "not supported; supported: git, svn, hg"},
 		{"missing subpath", project.Usage{Resource: wres + "@1.0.0#nope"}, "has no directory nope"},
@@ -353,18 +358,36 @@ func TestArchivesLocalDirAndIndex(t *testing.T) {
 	if e := lk.Find(editable); e == nil || e.Kind != lock.KindLocal || e.Name != "dev" {
 		t.Fatalf("local entry %+v", e)
 	}
-	// Offline from the lock with the server gone.
+	// Offline from the lock with the server and the local archive gone.
 	srv.Close()
+	os.Rename(kpar, kpar+".moved")
 	res2, _ := run(t, dir, Options{Offline: true})
 	if len(res2.Reused) != 3 {
 		t.Fatalf("offline %+v", res2)
 	}
+	os.Rename(kpar+".moved", kpar)
+	// Two usages of one editable directory with incompatible constraints conflict.
+	runErr(t, consumer(t, project.Usage{Resource: editable}, project.Usage{Resource: editable, VersionConstraint: "^1.0.0"}), Options{}, "already resolved to 0.0.1")
+	// An index entry must serve the package it names.
+	wrong := t.TempDir()
+	write(t, wrong, ".project.json", `{"name":"gears","publisher":"acme","version":"3.1.0"}`)
+	write(t, wrong, "Gears.sysml", "package Gears;\n")
+	wrongKpar := filepath.Join(t.TempDir(), "w.kpar")
+	project.Bundle(wrong, wrongKpar, time.Unix(0, 0))
+	wdata, _ := os.ReadFile(wrongKpar)
+	os.WriteFile(filepath.Join(idx, "acme", "tools", "3.1.0", "project.kpar"), wdata, 0o644)
+	wsum, _ := digest.File(wrongKpar)
+	vj, _ := os.ReadFile(filepath.Join(idx, "acme", "tools", "versions.json"))
+	os.WriteFile(filepath.Join(idx, "acme", "tools", "versions.json"), []byte(strings.Replace(string(vj), "sha256:"+sum, "sha256:"+wsum, 1)), 0o644)
+	runErr(t, consumer(t, project.Usage{Resource: "pkg:sysand/acme/tools"}), Options{Index: idx}, "served acme/gears, not acme/tools")
 	// Checksum mismatch inside an archive is refused.
 	bad := consumer(t, project.Usage{Resource: tamper(t, kpar)})
 	runErr(t, bad, Options{}, "checksum mismatch")
-	// A changed local archive against a lock is refused.
+	// A changed local archive against a lock is refused once the installed copy is gone
+	// (while it is present and has the locked digest, the lock wins and the source is not read).
 	write(t, pkg, "Tools.sysml", "package Tools { part def T; }\n")
 	project.Bundle(pkg, kpar, time.Unix(0, 0))
+	os.Remove(filepath.Join(dir, "lib", "acme-tools_3.1.0.kpar"))
 	runErr(t, dir, Options{}, "does not match the lock")
 	// pkg:sysand without an index.
 	runErr(t, consumer(t, project.Usage{Resource: "pkg:sysand/acme/tools"}), Options{}, "no sysand index configured")

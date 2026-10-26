@@ -214,7 +214,7 @@ func (r *resolver) resolve(req request) error {
 	}
 	id := o.Identity()
 	if e, done := r.chosen[id]; done {
-		if e.Kind == lock.KindVCS || e.Kind == lock.KindArchive {
+		if e.Kind != lock.KindStandard {
 			v, _ := version.Parse(e.Version)
 			if !req.constraint.Check(v) {
 				return fmt.Errorf("%s: usage %q wants %s but %s is already resolved to %s (required by another usage)", req.requester, req.resource, req.constraint, id, e.Version)
@@ -320,6 +320,9 @@ func (r *resolver) installArchive(e *lock.Entry, a *project.Archive, src string)
 }
 
 func (r *resolver) resolveLocalArchive(o *origin.Origin, req request) (*lock.Entry, error) {
+	if e, ok, err := r.reuseLocked(r.locked(o.Identity(), req.constraint)); ok || err != nil {
+		return e, err
+	}
 	p := o.Source
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(r.opts.Root, filepath.FromSlash(p))
@@ -517,6 +520,9 @@ func (r *resolver) resolveIndex(o *origin.Origin, req request) (*lock.Entry, err
 	if a.Project.Version != want.Version {
 		return nil, fmt.Errorf("%s: usage %q: index lists %s but the archive's .project.json says %s", req.requester, req.resource, want.Version, a.Project.Version)
 	}
+	if !strings.EqualFold(a.Project.Publisher, o.Publisher) || !strings.EqualFold(a.Project.Name, o.Name) {
+		return nil, fmt.Errorf("%s: usage %q: the index served %s/%s, not %s/%s", req.requester, req.resource, a.Project.Publisher, a.Project.Name, o.Publisher, o.Name)
+	}
 	src := strings.TrimSuffix(r.opts.Index, "/") + "/" + dir + "/" + want.Version + "/project.kpar"
 	e := &lock.Entry{Resource: id, Kind: lock.KindArchive, Publisher: a.Project.Publisher, Name: a.Project.Name, Version: a.Project.Version, Source: src, SHA256: a.SHA256}
 	return e, r.installArchive(e, a, file)
@@ -669,8 +675,8 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 		}
 		return nil, fmt.Errorf("%s: usage %q: %s of %s is not a package: %v (a package is a repository whose tagged tree has %s)", req.requester, req.resource, where, o.Source, err, project.ProjectFile)
 	}
-	pv, _ := version.Parse(p.Version)
-	if !pv.Equal(sel.Version) {
+	// Exact text, so build metadata must agree too (Version.Equal ignores it).
+	if p.Version != strings.TrimPrefix(sel.Tag, "v") {
 		return nil, fmt.Errorf("%s: usage %q: tag %s of %s carries version %s but its %s says \"version\": %q; the tag must equal the version", req.requester, req.resource, sel.Tag, o.Source, sel.Version, project.ProjectFile, p.Version)
 	}
 	sum, err := digest.Tree(tree)
