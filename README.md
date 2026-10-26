@@ -131,7 +131,7 @@ An authentication failure is reported with one hint naming the fix for that back
 ## Future
 
 Design only, not built here: a SysML-rendered index; LSP integration; attestation / cosign of
-releases; mirroring sysand.com; any server.
+releases; any server.
 
 ## Licence
 
