@@ -6,6 +6,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -25,6 +27,10 @@ func TestParseLocation(t *testing.T) {
 	}
 	if d, err := ParseLocation("/tmp/idx"); err != nil || !d.Local() {
 		t.Fatal(err)
+	}
+	q, err := ParseLocation("https://idx.example/base?ref=main")
+	if err != nil || q.URL("acme/tools/versions.json") != "https://idx.example/base/acme/tools/versions.json?ref=main" {
+		t.Fatalf("a query on a plain root is kept on every document: %v %v", q, err)
 	}
 	for _, tc := range []struct{ in, want string }{
 		{"", "index URL is empty"},
@@ -139,6 +145,27 @@ func TestReadVersionsRules(t *testing.T) {
 		t.Fatalf("yanked stays fetchable for a lock: %v %v", e, err)
 	}
 	if _, err := vs.Lookup("3.0.0"); err == nil || !strings.Contains(err.Error(), "does not list version `3.0.0`") {
+		t.Fatal(err)
+	}
+	body = `{"versions":[{"version":"1.0.0","usage":[],"kpar_size":1,"kpar_digest":"sha256:` + strings.ToUpper(h) + `"}]}`
+	vs, err = x.ReadVersions(ctx, "acme", "tools")
+	if err != nil || vs.Versions[0].KparDigest != "sha256:"+h {
+		t.Fatalf("digest hex is normalised to lowercase: %v %v", vs, err)
+	}
+}
+
+func TestLocalIndexReadsAreBounded(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "acme", "tools"), 0o755)
+	os.WriteFile(filepath.Join(dir, "acme", "tools", "versions.json"), make([]byte, 2048), 0o644)
+	x, err := Open(context.Background(), nil, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := x.Fetch(context.Background(), "acme/tools/versions.json", 1024); err == nil || !strings.Contains(err.Error(), "larger than the 1024 byte limit") {
+		t.Fatalf("%v", err)
+	}
+	if _, err := x.Fetch(context.Background(), "acme/tools/versions.json", 4096); err != nil {
 		t.Fatal(err)
 	}
 }

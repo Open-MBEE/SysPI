@@ -273,16 +273,16 @@ func cmdAdd(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 	if err := p.Validate(); err != nil {
 		return err
 	}
+	opts, err := c.options(stderr, false)
+	if err != nil {
+		return err
+	}
 	// Resolve against a copy first so a failing add leaves .project.json unchanged.
 	data, err := os.ReadFile(filepath.Join(c.dir, project.ProjectFile))
 	if err != nil {
 		return err
 	}
 	if err := p.Write(c.dir); err != nil {
-		return err
-	}
-	opts, err := c.options(stderr, false)
-	if err != nil {
 		return err
 	}
 	res, err := install.Run(ctx, opts)

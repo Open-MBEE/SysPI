@@ -432,3 +432,51 @@ func treeList(t *testing.T, dir string) []string {
 	})
 	return out
 }
+
+func TestOfflineNeverReadsHTTPCredentials(t *testing.T) {
+	widgets, _ := fixture(t)
+	dir := consumer(t, project.Usage{Resource: "pkg:git/" + widgets + "@1.0.0"})
+	run(t, dir, Options{})
+	t.Setenv("SYSAND_CRED_X_BEARER_TOKEN", "t") // malformed: no SYSAND_CRED_X pattern
+	t.Setenv("NETRC", filepath.Join(t.TempDir(), "missing"))
+	res, _ := run(t, dir, Options{Offline: true})
+	if len(res.Reused) != 1 {
+		t.Fatalf("%+v", res)
+	}
+	runErr(t, consumer(t, project.Usage{Resource: "https://idx.example/x.kpar"}), Options{}, "please specify URL pattern SYSAND_CRED_X")
+}
+
+func TestPublishRollsBackWhenTheLockCannotBeWritten(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	widgets, _ := fixture(t)
+	dir := consumer(t, project.Usage{Resource: "pkg:git/" + widgets + "@1.0.0"})
+	run(t, dir, Options{})
+	before, _ := os.ReadFile(filepath.Join(dir, project.LockFile))
+	// Move to 1.1.0 (replaces the installed tree) with the project directory read-only,
+	// so the lock cannot be written after lib/ was updated.
+	write(t, dir, project.ProjectFile, `{"name":"app","version":"0.1.0","usage":[{"resource":"pkg:git/`+widgets+`@1.1.0"}]}`)
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	opts := Options{Root: dir}
+	_, err := Run(context.Background(), opts)
+	os.Chmod(dir, 0o755)
+	if err == nil || !strings.Contains(err.Error(), "permission denied") || !strings.Contains(err.Error(), project.LockFile) {
+		t.Fatalf("the lock write must be what failed: %v", err)
+	}
+	after, _ := os.ReadFile(filepath.Join(dir, project.LockFile))
+	if string(before) != string(after) {
+		t.Fatal("lock changed")
+	}
+	entries, _ := os.ReadDir(filepath.Join(dir, project.LibDir))
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if strings.Join(names, ",") != "acme-widgets_1.0.0" {
+		t.Fatalf("lib/ must match the lock still on disk, got %v", names)
+	}
+}

@@ -10,6 +10,7 @@ package httpauth
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -210,7 +211,8 @@ func (p *Policy) Match(url string) []*Credential {
 // other than 429, retried with each matching credential in order until
 // one answers non-4xx (an ambiguous match is reported through Warn). An
 // unmatched URL carries the netrc entry for its host, if any. On a
-// redirect, the environment credential follows only to the same host.
+// redirect, either credential follows only to the same scheme, host and
+// port as the first request.
 type Transport struct {
 	Base  http.RoundTripper
 	Env   *Policy
@@ -225,12 +227,41 @@ func (t *Transport) base() http.RoundTripper {
 	return http.DefaultTransport
 }
 
-// originHost is the host of the first request of a redirect chain.
-func originHost(req *http.Request) string {
-	for req.Response != nil && req.Response.Request != nil {
-		req = req.Response.Request
+// origin is scheme://host:port, the unit a credential is scoped to.
+func origin(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		port = map[string]string{"http": "80", "https": "443"}[u.Scheme]
 	}
-	return req.URL.Hostname()
+	return u.Scheme + "://" + u.Hostname() + ":" + port
+}
+
+// sameOrigin reports whether req is the first request of its redirect
+// chain or a redirect to the same scheme, host and port as that first
+// request; a credential never follows a redirect anywhere else (another
+// host, another port, or an https → http downgrade).
+func sameOrigin(req *http.Request) bool {
+	first := req
+	for first.Response != nil && first.Response.Request != nil {
+		first = first.Response.Request
+	}
+	return origin(first.URL) == origin(req.URL)
+}
+
+// RedactURL hides the query of a URL in diagnostics: index locations and
+// archive URLs may carry access tokens there.
+func RedactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	if u.User != nil {
+		u.User = url.User("<redacted>")
+	}
+	if u.RawQuery != "" {
+		u.RawQuery = "<redacted>"
+	}
+	return u.String()
 }
 
 func clientError(resp *http.Response) bool {
@@ -242,10 +273,10 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.Header.Get("Authorization") != "" {
 		return t.base().RoundTrip(req)
 	}
-	matched := t.Env.Match(req.URL.String())
-	if len(matched) > 0 && originHost(req) != req.URL.Hostname() {
-		matched = nil // a credential never follows a redirect to another host
+	if !sameOrigin(req) {
+		return t.base().RoundTrip(req)
 	}
+	matched := t.Env.Match(req.URL.String())
 	if len(matched) == 0 {
 		if t.Netrc != nil {
 			if c, ok := t.Netrc.Lookup(req.URL.Hostname()); ok && c.Login != "" {
@@ -260,7 +291,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		for _, c := range matched {
 			pats = append(pats, Prefix+c.Label+"="+c.Pattern)
 		}
-		t.Warn(fmt.Sprintf("URL %s matches multiple authentication URL globs: %s", req.URL, strings.Join(pats, ", ")))
+		t.Warn(fmt.Sprintf("URL %s matches multiple authentication URL globs: %s", RedactURL(req.URL.String()), strings.Join(pats, ", ")))
 	}
 	first, err := t.base().RoundTrip(req)
 	if err != nil || !clientError(first) {
@@ -290,13 +321,13 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return withCred, nil
 }
 
-// Hint is the actionable line for an HTTP 401, 403 or 404 that may be an
-// authentication verdict (some hosts hide protected files behind 404).
-func Hint(status int, url, host string) string {
+// Hint is the actionable line for an HTTP 401 or 403; the URL is shown
+// with its query redacted.
+func Hint(status int, rawURL, host string) string {
 	if status != http.StatusUnauthorized && status != http.StatusForbidden {
 		return ""
 	}
-	return fmt.Sprintf("\n  hint: the server wants credentials; set SYSAND_CRED_<LABEL>=<URL glob matching %s> with SYSAND_CRED_<LABEL>_BEARER_TOKEN or _BASIC_USER/_BASIC_PASS, or add `machine %s login <user> password <secret>` to your netrc ($NETRC, else ~/.netrc)", url, host)
+	return fmt.Sprintf("\n  hint: the server wants credentials; set SYSAND_CRED_<LABEL>=<URL glob matching %s> with SYSAND_CRED_<LABEL>_BEARER_TOKEN or _BASIC_USER/_BASIC_PASS, or add `machine %s login <user> password <secret>` to your netrc ($NETRC, else ~/.netrc)", RedactURL(rawURL), host)
 }
 
 // Client is an HTTP client carrying the environment credentials of this

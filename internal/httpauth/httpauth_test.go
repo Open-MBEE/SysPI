@@ -179,3 +179,65 @@ func TestRedirectKeepsCredentialOnSameHostOnly(t *testing.T) {
 		t.Fatalf("same-host redirect keeps the credential after the anonymous try: %d %v", resp.StatusCode, same)
 	}
 }
+
+func TestNoCredentialAcrossPortOrDowngrade(t *testing.T) {
+	var landed []string
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		landed = append(landed, r.URL.Path+" "+r.Header.Get("Authorization"))
+	}))
+	defer plain.Close()
+	// Same hostname, another port.
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.WriteHeader(401)
+			return
+		}
+		http.Redirect(w, r, plain.URL+"/port", http.StatusFound)
+	}))
+	defer other.Close()
+	// Same hostname, https → http.
+	tls := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.WriteHeader(401)
+			return
+		}
+		http.Redirect(w, r, plain.URL+"/downgrade", http.StatusFound)
+	}))
+	defer tls.Close()
+	env, _ := FromEnv([]string{"SYSAND_CRED_T=http*://**", "SYSAND_CRED_T_BEARER_TOKEN=tok"})
+	nf := netrc.Parse("machine 127.0.0.1 login n password p")
+	c := &http.Client{Transport: &Transport{Base: tls.Client().Transport, Env: env, Netrc: nf}}
+	for _, u := range []string{other.URL + "/x", tls.URL + "/x"} {
+		resp, err := c.Get(u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+	if len(landed) != 2 || landed[0] != "/port " || landed[1] != "/downgrade " {
+		t.Fatalf("redirect targets on another port or scheme must see no credential: %q", landed)
+	}
+	// Netrc alone: same rule.
+	landed = nil
+	c = &http.Client{Transport: &Transport{Env: &Policy{}, Netrc: nf}}
+	resp, err := c.Get(other.URL + "/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if len(landed) != 1 || landed[0] != "/port " {
+		t.Fatalf("netrc must not follow to another port: %q", landed)
+	}
+}
+
+func TestRedactURL(t *testing.T) {
+	if got := RedactURL("https://idx.example/base/versions.json?token=abc&x=1"); got != "https://idx.example/base/versions.json?%3Credacted%3E" && got != "https://idx.example/base/versions.json?<redacted>" {
+		t.Fatal(got)
+	}
+	if got := RedactURL("https://u:p@idx.example/a"); strings.Contains(got, "u:p") {
+		t.Fatal(got)
+	}
+	if h := Hint(401, "https://idx.example/a?token=abc", "idx.example"); strings.Contains(h, "abc") {
+		t.Fatal(h)
+	}
+}

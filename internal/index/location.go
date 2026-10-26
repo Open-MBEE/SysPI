@@ -24,9 +24,10 @@ const ConfigFile = "sysand-index-config.json"
 // such as GitLab's; {path_raw} keeps "/" literal and encodes each segment).
 type Location struct {
 	raw      string
-	dir      string // local directory; empty for HTTP
-	prefix   string // text before the placeholder, or the whole base URL
-	suffix   string // text after the placeholder
+	dir      string   // local directory; empty for HTTP
+	prefix   string   // text before the placeholder, or the whole base URL
+	suffix   string   // text after the placeholder
+	base     *url.URL // parsed plain base URL (its query is kept on every document)
 	template bool
 	rawPath  bool // {path_raw}
 }
@@ -56,7 +57,7 @@ func ParseLocation(s string) (*Location, error) {
 		if !strings.HasSuffix(u.Path, "/") {
 			u.Path += "/"
 		}
-		return &Location{raw: s, prefix: u.String()}, nil
+		return &Location{raw: s, prefix: u.String(), base: u}, nil
 	}
 	if i := strings.Index(s, "://"); i >= 0 && !strings.HasPrefix(s, "file://") {
 		return nil, fmt.Errorf("index URL `%s` has unsupported scheme `%s`; only `http`, `https` and local directories are supported", redactUserinfo(s), s[:i])
@@ -150,7 +151,10 @@ func (l *Location) URL(rel string) string {
 		return filepath.Join(l.dir, filepath.FromSlash(rel))
 	}
 	if !l.template {
-		return l.prefix + escapeSegments(rel)
+		u := *l.base
+		u.Path += rel
+		u.RawPath = ""
+		return u.String()
 	}
 	if l.rawPath {
 		return l.prefix + escapeSegments(rel) + l.suffix
@@ -243,11 +247,17 @@ func parseDiscovered(at, field, value string, allowTemplate bool) (*Location, er
 func fetchRaw(ctx context.Context, client *http.Client, loc *Location, rel string, limit int64) ([]byte, error) {
 	if loc.dir != "" {
 		p := loc.URL(rel)
-		data, err := os.ReadFile(p)
+		st, err := os.Stat(p)
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("%s: %w", p, ErrNotFound)
 		}
-		return data, err
+		if err != nil {
+			return nil, err
+		}
+		if st.Size() > limit {
+			return nil, fmt.Errorf("%s: larger than the %d byte limit", p, limit)
+		}
+		return os.ReadFile(p)
 	}
 	return fetchURL(ctx, client, loc.URL(rel), limit)
 }

@@ -76,8 +76,28 @@ type resolver struct {
 	stage string
 	items []staged
 	slots map[string]slot
-	// indexes are the opened sysand indexes, discovery done once per run.
-	indexes []*index.Index
+	// indexes caches opened sysand indexes by position in opts.Indexes;
+	// an index is discovered when a lookup first reaches it.
+	indexes map[int]*index.Index
+	http    *http.Client
+}
+
+// httpClient builds the credential-carrying client on first use, so an
+// offline run never reads SYSAND_CRED_* or the netrc.
+func (r *resolver) httpClient() (*http.Client, error) {
+	if r.http != nil {
+		return r.http, nil
+	}
+	if r.opts.HTTP != nil {
+		r.http = r.opts.HTTP
+		return r.http, nil
+	}
+	c, err := httpauth.Client(func(msg string) { fmt.Fprintln(r.opts.Log, "warning:", msg) })
+	if err != nil {
+		return nil, err
+	}
+	r.http = c
+	return c, nil
 }
 
 type staged struct{ src, dst string }
@@ -88,13 +108,6 @@ type slot struct{ resource, sha256 string }
 func Run(ctx context.Context, opts Options) (*Result, error) {
 	if opts.Log == nil {
 		opts.Log = io.Discard
-	}
-	if opts.HTTP == nil {
-		c, err := httpauth.Client(func(msg string) { fmt.Fprintln(opts.Log, "warning:", msg) })
-		if err != nil {
-			return nil, err
-		}
-		opts.HTTP = c
 	}
 	root, err := filepath.Abs(opts.Root)
 	if err != nil {
@@ -132,21 +145,59 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			return nil, err
 		}
 	}
-	// Everything resolved and verified: publish the staged packages, then the lock.
-	for _, it := range r.items {
-		if err := os.RemoveAll(it.dst); err != nil {
-			return nil, err
-		}
-		if err := os.Rename(it.src, it.dst); err != nil {
-			return nil, err
-		}
+	// Everything resolved and verified: publish the staged packages, then
+	// the lock, restoring every replaced package if any step fails.
+	backups, err := r.publish()
+	if err != nil {
+		return nil, err
 	}
 	r.res.Lock = r.fresh
 	r.res.LockWritten, err = r.fresh.Write(root, project.LockFile)
 	if err != nil {
+		r.rollback(backups)
 		return nil, err
 	}
+	for _, b := range backups {
+		os.RemoveAll(b.src)
+	}
 	return r.res, nil
+}
+
+// publish moves each staged package into lib/, parking the package it
+// replaces beside the stage; the returned backups map each parked copy
+// (src) back to its destination (dst).
+func (r *resolver) publish() (backups []staged, err error) {
+	defer func() {
+		if err != nil {
+			r.rollback(backups)
+		}
+	}()
+	for i, it := range r.items {
+		if _, statErr := os.Lstat(it.dst); statErr == nil {
+			park := filepath.Join(r.stage, fmt.Sprintf("old-%d", i))
+			if err = os.Rename(it.dst, park); err != nil {
+				return backups, err
+			}
+			backups = append(backups, staged{src: park, dst: it.dst})
+		}
+		if err = os.Rename(it.src, it.dst); err != nil {
+			return backups, err
+		}
+	}
+	return backups, nil
+}
+
+// rollback undoes publish: removes what it placed and restores what it
+// parked, so lib/ matches the lock that is still on disk.
+func (r *resolver) rollback(backups []staged) {
+	for _, it := range r.items {
+		if _, err := os.Lstat(it.src); err != nil { // moved into place
+			os.RemoveAll(it.dst)
+		}
+	}
+	for _, b := range backups {
+		os.Rename(b.src, b.dst)
+	}
 }
 
 // usageConstraint derives the constraint of a usage: versionConstraint when
@@ -411,13 +462,17 @@ func (r *resolver) download(url string, dst string) error {
 	if err != nil {
 		return err
 	}
-	resp, err := r.opts.HTTP.Do(req)
+	client, err := r.httpClient()
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s: HTTP %s%s", url, resp.Status, httpauth.Hint(resp.StatusCode, url, req.URL.Hostname()))
+		return fmt.Errorf("%s: HTTP %s%s", httpauth.RedactURL(url), resp.Status, httpauth.Hint(resp.StatusCode, url, req.URL.Hostname()))
 	}
 	f, err := os.Create(dst)
 	if err != nil {
@@ -429,7 +484,7 @@ func (r *resolver) download(url string, dst string) error {
 		return err
 	}
 	if n > project.MaxArchiveSize {
-		return fmt.Errorf("%s: larger than the %d byte limit", url, project.MaxArchiveSize)
+		return fmt.Errorf("%s: larger than the %d byte limit", httpauth.RedactURL(url), project.MaxArchiveSize)
 	}
 	return nil
 }
@@ -465,19 +520,26 @@ func (r *resolver) resolveRemoteArchive(o *origin.Origin, req request) (*lock.En
 	return e, r.installArchive(e, a, file)
 }
 
-// openIndexes runs discovery on every configured index once.
-func (r *resolver) openIndexes() ([]*index.Index, error) {
-	if r.indexes != nil {
-		return r.indexes, nil
+// openIndex runs discovery on the i-th configured index the first time a
+// lookup reaches it; a later index that is down never blocks an earlier
+// one that has the package.
+func (r *resolver) openIndex(i int) (*index.Index, error) {
+	if x, ok := r.indexes[i]; ok {
+		return x, nil
 	}
-	for _, loc := range r.opts.Indexes {
-		x, err := index.Open(r.ctx, r.opts.HTTP, loc)
-		if err != nil {
-			return nil, fmt.Errorf("index %s: %v", loc, err)
-		}
-		r.indexes = append(r.indexes, x)
+	client, err := r.httpClient()
+	if err != nil {
+		return nil, err
 	}
-	return r.indexes, nil
+	x, err := index.Open(r.ctx, client, r.opts.Indexes[i])
+	if err != nil {
+		return nil, fmt.Errorf("index %s: %v", r.opts.Indexes[i], err)
+	}
+	if r.indexes == nil {
+		r.indexes = map[int]*index.Index{}
+	}
+	r.indexes[i] = x
+	return x, nil
 }
 
 func (r *resolver) resolveIndex(o *origin.Origin, req request) (*lock.Entry, error) {
@@ -496,13 +558,13 @@ func (r *resolver) resolveIndex(o *origin.Origin, req request) (*lock.Entry, err
 	if err != nil {
 		return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
 	}
-	indexes, err := r.openIndexes()
-	if err != nil {
-		return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
-	}
 	var want *index.VersionEntry
 	var from *index.Index
-	for _, x := range indexes {
+	for i := range r.opts.Indexes {
+		x, err := r.openIndex(i)
+		if err != nil {
+			return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
+		}
 		vs, err := x.ReadVersions(r.ctx, o.Publisher, o.Name)
 		if errors.Is(err, index.ErrNotFound) {
 			continue

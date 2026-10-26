@@ -206,6 +206,19 @@ func TestSysandDefaultIndexEnv(t *testing.T) {
 	if err == nil || !strings.Contains(out, "invalid `SYSAND_INDEX` environment variable: index URL is empty") || !strings.Contains(out, "hint: check for a stray `,`") {
 		t.Fatalf("%v\n%s", err, out)
 	}
+	// A rejected index value leaves .project.json unchanged.
+	app3 := initApp(t, root, "app-empty-keeps-project")
+	before, _ := os.ReadFile(filepath.Join(app3, ".project.json"))
+	shErr(app3, []string{"SYSAND_INDEX=" + srv.URL + ","}, bin, "add", "pkg:sysand/acme/tools")
+	if after, _ := os.ReadFile(filepath.Join(app3, ".project.json")); string(after) != string(before) {
+		t.Fatalf(".project.json changed by a failed add:\n%s", after)
+	}
+	// An unreachable default index never blocks a configured index that has the package.
+	app4 := initApp(t, root, "app-default-down")
+	if out, err := shErr(app4, []string{"SYSAND_DEFAULT_INDEX=http://127.0.0.1:1/"}, bin, "add", "-index", idx, "pkg:sysand/acme/tools"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	installed(t, app4)
 	// -no-index: nothing is consulted, not even the default.
 	out, err = shErr(initApp(t, root, "app-noindex"), nil, bin, "add", "-no-index", "pkg:sysand/acme/tools")
 	if err == nil || !strings.Contains(out, "no sysand index configured") {

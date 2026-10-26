@@ -56,6 +56,23 @@ type Usage struct {
 	VersionConstraint string `json:"versionConstraint,omitempty"`
 }
 
+// UnmarshalJSON also accepts the bare resource string earlier locks wrote
+// (its @<version>, if any, is the constraint, as in .project.json).
+func (u *Usage) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*u = Usage{Resource: s}
+		return nil
+	}
+	type plain Usage
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*u = Usage(p)
+	return nil
+}
+
 func sortUsages(u []Usage) {
 	sort.Slice(u, func(i, j int) bool {
 		if u[i].Resource != u[j].Resource {
@@ -159,12 +176,35 @@ func Read(dir, file string) (l *Lock, ok bool, err error) {
 }
 
 // Write writes the lock to <dir>/<file> only when its bytes changed, and
-// reports whether it wrote.
+// reports whether it wrote. The bytes land in a temporary file first and
+// are renamed into place, so a failure leaves the previous lock intact.
 func (l *Lock) Write(dir, file string) (bool, error) {
 	data := l.Marshal()
 	p := filepath.Join(dir, file)
 	if cur, err := os.ReadFile(p); err == nil && bytes.Equal(cur, data) {
 		return false, nil
 	}
-	return true, os.WriteFile(p, data, 0o644)
+	tmp, err := os.CreateTemp(dir, "."+file+".*")
+	if err != nil {
+		return false, err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return false, err
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return false, err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return false, err
+	}
+	if err := os.Rename(tmp.Name(), p); err != nil {
+		os.Remove(tmp.Name())
+		return false, err
+	}
+	return true, nil
 }

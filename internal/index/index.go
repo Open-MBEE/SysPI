@@ -60,18 +60,19 @@ func fetchURL(ctx context.Context, client *http.Client, u string, limit int64) (
 		return nil, err
 	}
 	defer resp.Body.Close()
+	shown := httpauth.RedactURL(u)
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("%s: %w", u, ErrNotFound)
+		return nil, fmt.Errorf("%s: %w", shown, ErrNotFound)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: HTTP %s%s", u, resp.Status, httpauth.Hint(resp.StatusCode, u, req.URL.Hostname()))
+		return nil, fmt.Errorf("%s: HTTP %s%s", shown, resp.Status, httpauth.Hint(resp.StatusCode, u, req.URL.Hostname()))
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, err
 	}
 	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("%s: larger than the %d byte limit", u, limit)
+		return nil, fmt.Errorf("%s: larger than the %d byte limit", shown, limit)
 	}
 	return data, nil
 }
@@ -130,7 +131,7 @@ func (x *Index) ReadVersions(ctx context.Context, publisher, name string) (*Vers
 	if err != nil {
 		return nil, err
 	}
-	at := x.Source(dir + "/versions.json")
+	at := httpauth.RedactURL(x.Source(dir + "/versions.json"))
 	data, err := x.Fetch(ctx, dir+"/versions.json", 16<<20)
 	if err != nil {
 		return nil, err
@@ -141,8 +142,8 @@ func (x *Index) ReadVersions(ctx context.Context, publisher, name string) (*Vers
 	}
 	seen := map[string]bool{}
 	var prev *version.Version
-	for _, e := range v.Versions {
-		e := e
+	for i := range v.Versions {
+		e := &v.Versions[i]
 		if strings.Contains(e.Version, "+") {
 			return nil, fmt.Errorf("versions.json at `%s` has entry with version `%s` carrying build metadata; build metadata is not permitted in index-advertised versions", at, e.Version)
 		}
@@ -153,6 +154,7 @@ func (x *Index) ReadVersions(ctx context.Context, publisher, name string) (*Vers
 		if !strings.HasPrefix(e.KparDigest, "sha256:") || len(e.KparDigest) != 7+64 || strings.Trim(strings.ToLower(e.KparDigest[7:]), "0123456789abcdef") != "" {
 			return nil, fmt.Errorf("versions.json at `%s` has entry for version `%s` with malformed `kpar_digest` = `%s` (expected `sha256:<64-hex>`)", at, e.Version, e.KparDigest)
 		}
+		e.KparDigest = "sha256:" + strings.ToLower(e.KparDigest[7:])
 		if e.Usage == nil || e.KparSize <= 0 {
 			return nil, fmt.Errorf("versions.json at `%s` has entry for version `%s` lacking `usage` or `kpar_size`", at, e.Version)
 		}
