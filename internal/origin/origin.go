@@ -7,9 +7,13 @@
 //
 //	pkg:<vcs>/<host>/<path>[@<version>][#<subpath>]
 //
-// with <vcs> one of git, svn or hg. The grammar is hand-parsed here; pkg:git,
-// pkg:svn, pkg:hg and pkg:sysand are not registered purl types and this
-// package makes no attempt to be a purl parser. Plain clone URLs
+// with <vcs> one of git, svn or hg. pkg:git is the registered Package-URL
+// type `git` (ECMA-427; purl-spec types/git-definition.json: namespace =
+// host, name = repository path, version = a git reference, subpath
+// allowed) with <version> restricted to a tag naming a semantic version — a
+// commit sha is refused. pkg:svn, pkg:hg and pkg:sysand are not registered
+// types and use the same shape by analogy. The grammar is hand-parsed here;
+// this package makes no attempt to be a general purl parser. Plain clone URLs
 // (https://host/path.git@1.0.0, ssh://git@host/path@1.0.0, git@host:path@1.0.0,
 // file:///path@1.0.0) are accepted and normalised to the pkg:<vcs> form.
 package origin
@@ -362,6 +366,10 @@ func cutFragment(s string) (string, string) {
 // cutVersion splits a trailing @<version> when <version> parses as semver;
 // an @ that introduces something else (git@host, user@) is left alone. An @
 // followed by a non-semver string at the end is an error, not silently kept.
+func isHex(s string) bool {
+	return s != "" && strings.Trim(strings.ToLower(s), "0123456789abcdef") == ""
+}
+
 func cutVersion(res, s string) (string, string, error) {
 	i := strings.LastIndexByte(s, '@')
 	if i < 0 {
@@ -376,7 +384,10 @@ func cutVersion(res, s string) (string, string, error) {
 		return s, "", nil
 	}
 	if _, err := version.Parse(v); err != nil {
-		return "", "", fmt.Errorf("resource %q: %q after @ is not a semantic version", res, v)
+		if isHex(v) && (len(v) == 40 || len(v) == 64 || (len(v) >= 7 && len(v) <= 12)) {
+			return "", "", fmt.Errorf("resource %q: %q after @ looks like a commit id; a Package-URL git version may be any git reference, but SysPI resolves only a tag naming a semantic version (v<semver> or <semver>, e.g. @1.2.0)", res, v)
+		}
+		return "", "", fmt.Errorf("resource %q: %q after @ is not a semantic version (SysPI versions are tags naming a semantic version, e.g. @1.2.0)", res, v)
 	}
 	return s[:i], v, nil
 }

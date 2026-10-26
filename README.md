@@ -14,8 +14,12 @@ whose `sysml` and `sysml-lsp` only *read* what package managers install.
   (`https://host/org/repo.git@1.2.0`, `ssh://git@host/org/repo@1.2.0`, `git@host:org/repo@1.2.0`,
   `file:///srv/repo@1.2.0`) is accepted and normalised to it. `pkg:github/…` and `pkg:gitlab/…`
   are refused in favour of `pkg:git/github.com/…`; `pkg:cvs/…` is not supported.
-  `pkg:git`, `pkg:svn`, `pkg:hg` and `pkg:sysand` are **not registered purl types**: SysPI
-  hand-parses them and uses no purl library.
+  `pkg:git/<host>/<path>@<version>#<subpath>` is the registered Package-URL type `git`
+  (ECMA-427; purl-spec `types/git-definition.json`: namespace = host, name = repository path,
+  version = a git reference, subpath allowed) with `<version>` restricted to a tag naming a
+  semantic version — a commit sha is refused with a message saying so. `pkg:svn`, `pkg:hg` and
+  `pkg:sysand` are **not** registered types; they use the same shape by analogy. SysPI
+  hand-parses all four and uses no purl library.
 - **Package** — the tagged tree (or `#<subpath>` within it) *is* the project directory:
   `.project.json` (KerML 1.1 §10.3, Table 12) at the tag is mandatory and its `version` must
   equal the tag, `v<semver>` preferred, bare `<semver>` accepted. No `.project.json` is an error;

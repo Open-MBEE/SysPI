@@ -25,7 +25,15 @@ Refused: `pkg:github/…`, `pkg:gitlab/…` and other provider vocabularies (the
 identity; write `pkg:git/github.com/…`); `pkg:cvs/…` and any other version-control system
 ("not supported; supported: git, svn, hg"); `@latest` or any non-semver version.
 
-None of these is a registered purl type; SysPI hand-parses them and does not use a purl library.
+`pkg:git` is the registered Package-URL type `git` (ECMA-427; purl-spec
+`types/git-definition.json`): namespace = the git host, name = the repository path with owner,
+version = a git reference, subpath allowed. SysPI restricts the version to a tag naming a semantic
+version (`v<semver>` or `<semver>`); a commit id such as
+`pkg:git/cygwin.com/cgit/newlib-cygwin@6d049c54…` is refused with an error saying exactly that,
+while the other official examples (`pkg:git/projects.blender.org/blender/blender.git`,
+`pkg:git/gitlab.gnome.org/GNOME/adwaita-fonts`) parse unchanged. `pkg:svn`, `pkg:hg` and
+`pkg:sysand` are not registered purl types and use the same shape by analogy. SysPI hand-parses
+all of them and does not use a purl library.
 
 ## What a package is
 
