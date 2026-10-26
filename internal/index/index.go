@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -21,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Open-MBEE/SysPI/internal/httpauth"
 	"github.com/Open-MBEE/SysPI/internal/project"
 	"github.com/Open-MBEE/SysPI/internal/version"
 )
@@ -46,60 +46,70 @@ type Root struct {
 	} `json:"projects"`
 }
 
-// Fetch reads a document from an index rooted at a URL or local directory.
-func Fetch(ctx context.Context, client *http.Client, root, rel string, limit int64) ([]byte, error) {
-	if strings.HasPrefix(root, "http://") || strings.HasPrefix(root, "https://") {
-		u, err := url.Parse(strings.TrimSuffix(root, "/") + "/" + rel)
-		if err != nil {
-			return nil, err
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-		if err != nil {
-			return nil, err
-		}
-		if client == nil {
-			client = http.DefaultClient
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode == http.StatusNotFound {
-			return nil, fmt.Errorf("%s: %w", u, ErrNotFound)
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("%s: HTTP %s%s", u, resp.Status, AuthHint(resp.StatusCode, u.Hostname()))
-		}
-		data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
-		if err != nil {
-			return nil, err
-		}
-		if int64(len(data)) > limit {
-			return nil, fmt.Errorf("%s: larger than the %d byte limit", u, limit)
-		}
-		return data, nil
+// fetchURL reads one HTTP document, bounded by limit bytes.
+func fetchURL(ctx context.Context, client *http.Client, u string, limit int64) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
 	}
-	root = strings.TrimPrefix(root, "file://")
-	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
-	if os.IsNotExist(err) {
-		return nil, fmt.Errorf("%s: %w", filepath.Join(root, rel), ErrNotFound)
+	if client == nil {
+		client = http.DefaultClient
 	}
-	return data, err
-}
-
-// AuthHint is the actionable line for an HTTP 401 or 403 from host: a netrc
-// entry ($NETRC, else ~/.netrc or %USERPROFILE%\_netrc) is how credentials
-// reach syspi's own downloads.
-func AuthHint(status int, host string) string {
-	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		return fmt.Sprintf("\n  hint: the server wants credentials; add `machine %s login <user> password <secret>` to your netrc ($NETRC, else ~/.netrc)", host)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
 	}
-	return ""
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("%s: %w", u, ErrNotFound)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: HTTP %s%s", u, resp.Status, httpauth.Hint(resp.StatusCode, u, req.URL.Hostname()))
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s: larger than the %d byte limit", u, limit)
+	}
+	return data, nil
 }
 
 // ErrNotFound reports a document the index does not serve.
 var ErrNotFound = fmt.Errorf("not found")
+
+// ErrRemoved reports a version the index marks status "removed".
+var ErrRemoved = fmt.Errorf("removed upstream")
+
+// Index is an opened index: a configured location after discovery.
+type Index struct {
+	Location  *Location
+	Endpoints *Endpoints
+	client    *http.Client
+}
+
+// Open parses the location and runs discovery on it.
+func Open(ctx context.Context, client *http.Client, location string) (*Index, error) {
+	loc, err := ParseLocation(location)
+	if err != nil {
+		return nil, err
+	}
+	ep, err := Discover(ctx, client, loc)
+	if err != nil {
+		return nil, err
+	}
+	return &Index{Location: loc, Endpoints: ep, client: client}, nil
+}
+
+// Fetch reads the index-relative document rel from the index root.
+func (x *Index) Fetch(ctx context.Context, rel string, limit int64) ([]byte, error) {
+	return fetchRaw(ctx, x.client, x.Endpoints.IndexRoot, rel, limit)
+}
+
+// Source is the address the index-relative path is served from, as
+// recorded in the lock.
+func (x *Index) Source(rel string) string { return x.Endpoints.IndexRoot.URL(rel) }
 
 // ProjectPath is the index-relative directory of pkg:sysand/<publisher>/<name>.
 func ProjectPath(publisher, name string) (string, error) {
@@ -111,40 +121,72 @@ func ProjectPath(publisher, name string) (string, error) {
 	return publisher + "/" + name, nil
 }
 
-// ReadVersions fetches and validates <root>/<publisher>/<name>/versions.json.
-func ReadVersions(ctx context.Context, client *http.Client, root, publisher, name string) (*Versions, error) {
+// ReadVersions fetches <publisher>/<name>/versions.json and validates it
+// as sysand does: every version a semantic version without build
+// metadata, listed once, kpar_digest sha256:<64-hex>, entries in
+// descending semver precedence.
+func (x *Index) ReadVersions(ctx context.Context, publisher, name string) (*Versions, error) {
 	dir, err := ProjectPath(publisher, name)
 	if err != nil {
 		return nil, err
 	}
-	data, err := Fetch(ctx, client, root, dir+"/versions.json", 16<<20)
+	at := x.Source(dir + "/versions.json")
+	data, err := x.Fetch(ctx, dir+"/versions.json", 16<<20)
 	if err != nil {
 		return nil, err
 	}
 	var v Versions
 	if err := json.Unmarshal(data, &v); err != nil {
-		return nil, fmt.Errorf("%s/versions.json: %v", dir, err)
+		return nil, fmt.Errorf("failed to parse JSON from `%s`: %v", at, err)
 	}
 	seen := map[string]bool{}
-	for i, e := range v.Versions {
-		if e.Version == "" || e.KparDigest == "" || e.KparSize <= 0 || e.Usage == nil {
-			return nil, fmt.Errorf("%s/versions.json: entry %d lacks version, usage, kpar_size or kpar_digest", dir, i)
+	var prev *version.Version
+	for _, e := range v.Versions {
+		e := e
+		if strings.Contains(e.Version, "+") {
+			return nil, fmt.Errorf("versions.json at `%s` has entry with version `%s` carrying build metadata; build metadata is not permitted in index-advertised versions", at, e.Version)
 		}
-		if _, err := version.Parse(e.Version); err != nil || strings.Contains(e.Version, "+") {
-			return nil, fmt.Errorf("%s/versions.json: entry %d: version %q is not a semantic version without build metadata", dir, i, e.Version)
+		pv, err := version.Parse(e.Version)
+		if err != nil {
+			return nil, fmt.Errorf("versions.json at `%s` has entry with non-semver version `%s`", at, e.Version)
 		}
-		if !strings.HasPrefix(e.KparDigest, "sha256:") || len(e.KparDigest) != 7+64 {
-			return nil, fmt.Errorf("%s/versions.json: entry %d: kpar_digest must be sha256:<64 hex>", dir, i)
+		if !strings.HasPrefix(e.KparDigest, "sha256:") || len(e.KparDigest) != 7+64 || strings.Trim(strings.ToLower(e.KparDigest[7:]), "0123456789abcdef") != "" {
+			return nil, fmt.Errorf("versions.json at `%s` has entry for version `%s` with malformed `kpar_digest` = `%s` (expected `sha256:<64-hex>`)", at, e.Version, e.KparDigest)
+		}
+		if e.Usage == nil || e.KparSize <= 0 {
+			return nil, fmt.Errorf("versions.json at `%s` has entry for version `%s` lacking `usage` or `kpar_size`", at, e.Version)
 		}
 		if seen[e.Version] {
-			return nil, fmt.Errorf("%s/versions.json: version %s listed twice", dir, e.Version)
+			return nil, fmt.Errorf("versions.json at `%s` lists version `%s` more than once", at, e.Version)
 		}
 		seen[e.Version] = true
+		if prev != nil && !pv.Less(*prev) {
+			return nil, fmt.Errorf("versions.json at `%s` is not in descending semver precedence: `%s` precedes `%s` in wire order", at, prev, pv)
+		}
+		prev = &pv
 	}
 	return &v, nil
 }
 
-// Available lists the entries that are not retired, newest first.
+// Lookup finds one advertised version. A version marked "removed" is
+// ErrRemoved (its files are gone); "yanked" is returned (files are still
+// served, so a lock may keep it) but Available excludes it.
+func (v *Versions) Lookup(ver string) (*VersionEntry, error) {
+	for i := range v.Versions {
+		e := &v.Versions[i]
+		if e.Version != ver {
+			continue
+		}
+		if e.Status == "removed" {
+			return nil, fmt.Errorf("version `%s` %w (versions.json marks it `status: \"removed\"`)", ver, ErrRemoved)
+		}
+		return e, nil
+	}
+	return nil, fmt.Errorf("versions.json does not list version `%s`", ver)
+}
+
+// Available lists the entries that are neither yanked nor removed, newest
+// first.
 func (v *Versions) Available() []VersionEntry {
 	var out []VersionEntry
 	for _, e := range v.Versions {

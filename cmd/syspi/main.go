@@ -97,23 +97,70 @@ var errUsage = errors.New("usage")
 type commonFlags struct {
 	dir     string
 	index   string
+	noIndex bool
 	offline bool
 	quiet   bool
 }
 
 func (c *commonFlags) bind(fs *flag.FlagSet) {
 	fs.StringVar(&c.dir, "C", ".", "project directory (holding .project.json)")
-	fs.StringVar(&c.index, "index", os.Getenv("SYSPI_INDEX"), "sysand static index URL or directory for pkg:sysand/ resources (default $SYSPI_INDEX)")
+	fs.StringVar(&c.index, "index", os.Getenv("SYSPI_INDEX"), "comma-separated sysand index URLs, URL templates or directories for pkg:sysand/ resources, tried before $SYSAND_INDEX and the default index ($SYSAND_DEFAULT_INDEX, else https://sysand.com) (default $SYSPI_INDEX)")
+	fs.BoolVar(&c.noIndex, "no-index", false, "use no sysand index at all, not even the default")
 	fs.BoolVar(&c.offline, "offline", false, "never contact a repository or server; the lock and lib/ must already satisfy the project")
 	fs.BoolVar(&c.quiet, "q", false, "print only errors")
 }
 
-func (c *commonFlags) options(stderr io.Writer, lockOnly bool) install.Options {
+func (c *commonFlags) options(stderr io.Writer, lockOnly bool) (install.Options, error) {
 	log := stderr
 	if c.quiet {
 		log = io.Discard
 	}
-	return install.Options{Root: c.dir, Index: c.index, Offline: c.offline, Log: log, LockOnly: lockOnly}
+	indexes, err := c.indexes()
+	if err != nil {
+		return install.Options{}, err
+	}
+	return install.Options{Root: c.dir, Indexes: indexes, Offline: c.offline, Log: log, LockOnly: lockOnly}, nil
+}
+
+// DefaultIndex is sysand's public index, consulted last unless
+// SYSAND_DEFAULT_INDEX names other defaults or -no-index is given.
+const DefaultIndex = "https://sysand.com"
+
+// indexes is the ordered index list: -index/$SYSPI_INDEX, then
+// $SYSAND_INDEX, then the defaults; all comma-separated like sysand's.
+func (c *commonFlags) indexes() ([]string, error) {
+	if c.noIndex {
+		return nil, nil
+	}
+	var out []string
+	add := func(name, what, value string, set bool) error {
+		if !set {
+			return nil
+		}
+		for _, v := range strings.Split(value, ",") {
+			if strings.TrimSpace(v) == "" {
+				return fmt.Errorf("invalid `%s` %s: index URL is empty\nhint: check for a stray `,`, or for `%s` set to an empty value", name, what, name)
+			}
+			out = append(out, strings.TrimSpace(v))
+		}
+		return nil
+	}
+	if err := add("-index/SYSPI_INDEX", "value", c.index, c.index != ""); err != nil {
+		return nil, err
+	}
+	v, set := os.LookupEnv("SYSAND_INDEX")
+	if err := add("SYSAND_INDEX", "environment variable", v, set); err != nil {
+		return nil, err
+	}
+	v, set = os.LookupEnv("SYSAND_DEFAULT_INDEX")
+	if set {
+		if err := add("SYSAND_DEFAULT_INDEX", "environment variable", v, true); err != nil {
+			return nil, err
+		}
+	} else {
+		out = append(out, DefaultIndex)
+	}
+	return out, nil
 }
 
 func newFlagSet(name string, stderr io.Writer, synopsis string) *flag.FlagSet {
@@ -234,7 +281,11 @@ func cmdAdd(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 	if err := p.Write(c.dir); err != nil {
 		return err
 	}
-	res, err := install.Run(ctx, c.options(stderr, false))
+	opts, err := c.options(stderr, false)
+	if err != nil {
+		return err
+	}
+	res, err := install.Run(ctx, opts)
 	if err != nil {
 		os.WriteFile(filepath.Join(c.dir, project.ProjectFile), data, 0o644)
 		return err
@@ -254,7 +305,11 @@ func cmdInstall(ctx context.Context, name string, args []string, stdout, stderr 
 		fs.Usage()
 		return errUsage
 	}
-	res, err := install.Run(ctx, c.options(stderr, lockOnly))
+	opts, err := c.options(stderr, lockOnly)
+	if err != nil {
+		return err
+	}
+	res, err := install.Run(ctx, opts)
 	if err != nil {
 		return err
 	}

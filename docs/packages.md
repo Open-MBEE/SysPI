@@ -127,8 +127,27 @@ present there is not installed again — but never writes.
 `syspi index emit -o <dir> <packages>…` writes sysand's static layout: `<dir>/index.json`
 listing `pkg:sysand/<publisher>/<name>` IRIs and, per project,
 `<publisher>/<name>/versions.json` (`version`, `usage`, `kpar_size`, `kpar_digest`, newest first)
-with `<version>/{.project.json,.meta.json,project.kpar}`. `pkg:sysand/<publisher>/<name>`
-resources resolve through the index named by `-index` or `$SYSPI_INDEX`.
+with `<version>/{.project.json,.meta.json,project.kpar}`.
+
+`pkg:sysand/<publisher>/<name>` resources resolve through the indexes, in order, of `-index` /
+`$SYSPI_INDEX`, then `$SYSAND_INDEX`, then `$SYSAND_DEFAULT_INDEX` (else `https://sysand.com`);
+each is a comma-separated list, an empty entry is an error (`hint: check for a stray `,``), and
+`-no-index` consults none. The first index whose `versions.json` exists for the project decides.
+
+An index location is an absolute `http(s)` URL without userinfo or fragment, a local directory,
+or a URL template holding exactly one `{path}` (the index-relative path percent-encoded as one
+segment, `/` → `%2F`, for file APIs like GitLab's) or `{path_raw}` (literal `/`). Discovery
+fetches `<location>/sysand-index-config.json` first: absent (404) means the location itself is
+the index root; present, its `index_root` (URL or template) is where the files live and
+`api_root` (plain URL) is recorded for diagnostics and never called — SysPI has no publish or
+whoami. Relative, non-HTTP(S) or userinfo-bearing values are errors.
+
+`versions.json` is validated as sysand validates it: every `version` a semantic version without
+build metadata, listed once, in descending precedence (`10.0.0-beta.1` before `10.0.0` is an
+error), `kpar_digest` = `sha256:<64-hex>`. Entries with `status: "yanked"` or `"removed"` are
+never newly selected; re-fetching a locked version that is now `removed` is a hard error, a
+`yanked` one still downloads (its files are served). The lock's `source` is the resolved
+`project.kpar` URL.
 
 ## Bundle reproducibility
 
@@ -142,11 +161,25 @@ the project.
 
 SysPI shells out to the user's `git`, `svn` and `hg` with the user's environment, so their
 credential helpers, SSH agents, hgrc `[auth]` sections and svn auth caches apply unchanged; its
-own HTTP downloads (index files, `.kpar` URLs) take HTTP Basic credentials from the netrc file
-(`$NETRC`, else `~/.netrc` / `%USERPROFILE%\_netrc`), matched by host and sent only to that
-host — Go's client strips `Authorization` on a cross-host redirect and SysPI applies the netrc
-per request host, so a redirect elsewhere gets that host's entry or none. Proxies come from the
-environment through `http.DefaultTransport`.
+own HTTP downloads (index files, `.kpar` URLs) take credentials in this order:
+
+1. sysand's environment grammar, read verbatim so a sysand user's CI variables work unchanged:
+   `SYSAND_CRED_<LABEL>` is a URL glob (`*`, `?` within one path segment, `**` across, `[...]`,
+   `{a,b}`), paired with `SYSAND_CRED_<LABEL>_BEARER_TOKEN` or with
+   `SYSAND_CRED_<LABEL>_BASIC_USER` and `SYSAND_CRED_<LABEL>_BASIC_PASS`. A group missing its
+   pattern, half of a Basic pair, both schemes or a label is an error naming the variable. A URL
+   that matches is requested without credentials first and, on any 4xx except 429 (some hosts
+   answer 404 to anonymous requests for protected files), retried with the credential; when
+   several globs match, a warning lists them and each is tried in label order until one answers
+   non-4xx, else the first credentialed response stands. On a redirect the credential is sent only
+   to a target on the same host.
+2. the netrc file (`$NETRC`, else `~/.netrc` / `%USERPROFILE%\_netrc`) as HTTP Basic, matched by
+   host and sent only to that host; a redirect elsewhere gets that host's entry or none.
+3. anonymous.
+
+Proxies come from the environment through `http.DefaultTransport`. Not implemented: sysand's
+keyring credential store and `sysand auth login/logout/whoami` (their blob format is theirs; use
+the variables above or netrc), `sysand publish`.
 
 Deliberately not done: no prompting (`GIT_TERMINAL_PROMPT=0`, `svn --non-interactive`), no
 credential storage or cache of SysPI's own, no credentials in URLs (`https://user:pw@…` is
@@ -158,9 +191,14 @@ failed` → configure a credential helper or use an SSH remote; svn `E170001` / 
 `svn ls <url>` once interactively so svn caches the credentials (on builds without plaintext
 password storage, Debian and Ubuntu among them, the cache holds only the username — use
 `svn+ssh://` or a keyring store); hg `authorization failed` / `http error 401` → add an `[auth]`
-section to hgrc (`HGPLAIN=1` does not disable it); HTTP 401 / 403 → a netrc entry for the host.
+section to hgrc (`HGPLAIN=1` does not disable it); HTTP 401 / 403 → a `SYSAND_CRED_*` group
+matching the URL or a netrc entry for the host.
 
 `tests/e2e/auth_test.go` proves each path against local servers: git over dumb HTTP behind Basic
 auth with a credential helper configured through `GIT_CONFIG_*`, hg over `static-http://` with an
 `[auth]` section in `HGRCPATH`, svn against `svnserve` with `anon-access = none` and a seeded
 auth cache, and the index and `.kpar` downloads behind Basic auth with a netrc.
+`tests/e2e/sysand_test.go` proves the sysand side: a discovery document whose `index_root` is a
+second server, bearer and Basic `SYSAND_CRED_*` groups (anonymous request first), an unmatched
+glob ending in 401 with a hint naming both mechanisms, a credential dropped on a cross-host
+redirect, and `SYSAND_INDEX` / `SYSAND_DEFAULT_INDEX` picked up with no index configured.

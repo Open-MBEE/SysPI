@@ -86,8 +86,18 @@ attached to each `v*` tag. Requires `git` (and `svn` / `hg` for packages hosted 
 - **OpenSysML** reads `lib/` next to `.project.json` (and `.sysand/lib/`) and honours
   `@<version>` in a usage IRI as an exact constraint; that is the whole contract between the tools.
 - **sysand** users can install packages from an index SysPI emits
-  (`sysand --index <url>`); SysPI resolves `pkg:sysand/<publisher>/<name>` from any
-  sysand static index (`<index>/<publisher>/<name>/versions.json`).
+  (`sysand --index <url>`); SysPI resolves `pkg:sysand/<publisher>/<name>` from any sysand index
+  with the configuration a sysand user already has. Honoured: the static layout
+  (`index.json`, `<publisher>/<name>/versions.json`, `<version>/{.project.json,.meta.json,project.kpar}`);
+  the discovery document `<location>/sysand-index-config.json` (`index_root`, `api_root`;
+  absent means the location is the flat root; relative URLs are an error; `api_root` is recorded,
+  never called); URL templates with `{path}` or `{path_raw}`; `versions.json` validation
+  (descending semver, no build metadata, `sha256:<64-hex>`, no duplicates, `removed` is a hard
+  error, `yanked` is never newly selected); the index chain `-index`/`$SYSPI_INDEX`, then
+  `$SYSAND_INDEX`, then `$SYSAND_DEFAULT_INDEX` (else `https://sysand.com`), all comma-separated,
+  `-no-index` to use none; and the `SYSAND_CRED_*` credential grammar below. Not honoured: the
+  keyring credential store and `sysand auth login/logout/whoami` (use `SYSAND_CRED_*` or netrc),
+  `sysand publish`, `sysand-lock.toml` as output.
 
 ## Credentials
 
@@ -102,9 +112,14 @@ configuration, and credentials never enter `.project.json`, the lock or a log (U
 - **svn** — the user's `svn` runs `--non-interactive`: run `svn ls <url>` once interactively so it
   caches the credentials, or use `svn+ssh://`. Builds with plaintext password storage disabled
   (Debian, Ubuntu) cache the username only; use `svn+ssh://` or a keyring store there.
-- **HTTP** (sysand index files, `.kpar` URLs) — HTTP Basic from your netrc: `$NETRC` if set, else
-  `~/.netrc` (`%USERPROFILE%\_netrc` on Windows), matched by host and never sent to another host
-  on a redirect. Proxy settings come from the environment (`HTTPS_PROXY`, `NO_PROXY`).
+- **HTTP** (sysand index files, `.kpar` URLs) — first sysand's environment grammar:
+  `SYSAND_CRED_<LABEL>=<URL glob>` with `SYSAND_CRED_<LABEL>_BEARER_TOKEN` or
+  `SYSAND_CRED_<LABEL>_BASIC_USER` + `SYSAND_CRED_<LABEL>_BASIC_PASS` (`*` and `?` stop at `/`,
+  `**` does not). A matching URL is requested anonymously and retried with the credential on a
+  4xx other than 429; several matching globs are warned about and tried in label order until one
+  answers non-4xx; a credential follows a redirect only to the same host. Then HTTP Basic from
+  your netrc: `$NETRC` if set, else `~/.netrc` (`%USERPROFILE%\_netrc` on Windows), matched by
+  host. Then anonymous. Proxy settings come from the environment (`HTTPS_PROXY`, `NO_PROXY`).
 
 An authentication failure is reported with one hint naming the fix for that backend.
 

@@ -67,10 +67,20 @@ func sh(t *testing.T, dir string, name string, args ...string) string {
 	return out
 }
 
+// emptyIndex stands in for sysand's default index so no test reaches
+// https://sysand.com; a test that wants another default overrides it.
+var emptyIndex = sync.OnceValue(func() string {
+	dir, err := os.MkdirTemp("", "syspi-empty-index-*")
+	if err != nil {
+		panic(err)
+	}
+	return dir
+})
+
 func shErr(dir string, env []string, name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	cmd.Env = append(append(os.Environ(), gitEnv...), env...)
+	cmd.Env = append(append(append(os.Environ(), gitEnv...), "SYSAND_DEFAULT_INDEX="+emptyIndex()), env...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

@@ -341,7 +341,7 @@ func TestArchivesLocalDirAndIndex(t *testing.T) {
 		project.Usage{Resource: "pkg:sysand/acme/tools", VersionConstraint: "^3.0.0"},
 		project.Usage{Resource: editable},
 	)
-	res, _ := run(t, dir, Options{Index: idx})
+	res, _ := run(t, dir, Options{Indexes: []string{idx}})
 	if len(res.Installed) != 1 || len(res.Reused) != 2 || len(res.Skipped) != 2 {
 		t.Fatalf("result %+v", res)
 	}
@@ -379,7 +379,7 @@ func TestArchivesLocalDirAndIndex(t *testing.T) {
 	wsum, _ := digest.File(wrongKpar)
 	vj, _ := os.ReadFile(filepath.Join(idx, "acme", "tools", "versions.json"))
 	os.WriteFile(filepath.Join(idx, "acme", "tools", "versions.json"), []byte(strings.Replace(string(vj), "sha256:"+sum, "sha256:"+wsum, 1)), 0o644)
-	runErr(t, consumer(t, project.Usage{Resource: "pkg:sysand/acme/tools"}), Options{Index: idx}, "served acme/gears, not acme/tools")
+	runErr(t, consumer(t, project.Usage{Resource: "pkg:sysand/acme/tools"}), Options{Indexes: []string{idx}}, "served acme/gears, not acme/tools")
 	// Checksum mismatch inside an archive is refused.
 	bad := consumer(t, project.Usage{Resource: tamper(t, kpar)})
 	runErr(t, bad, Options{}, "checksum mismatch")
@@ -391,7 +391,7 @@ func TestArchivesLocalDirAndIndex(t *testing.T) {
 	runErr(t, dir, Options{}, "does not match the lock")
 	// pkg:sysand without an index.
 	runErr(t, consumer(t, project.Usage{Resource: "pkg:sysand/acme/tools"}), Options{}, "no sysand index configured")
-	runErr(t, consumer(t, project.Usage{Resource: "pkg:sysand/acme/other"}), Options{Index: idx}, "is not in the index")
+	runErr(t, consumer(t, project.Usage{Resource: "pkg:sysand/acme/other"}), Options{Indexes: []string{idx}}, "is not in the index")
 }
 
 // tamper copies an archive and flips a byte of a member's content by

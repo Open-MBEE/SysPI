@@ -18,9 +18,9 @@ import (
 	"strings"
 
 	"github.com/Open-MBEE/SysPI/internal/digest"
+	"github.com/Open-MBEE/SysPI/internal/httpauth"
 	"github.com/Open-MBEE/SysPI/internal/index"
 	"github.com/Open-MBEE/SysPI/internal/lock"
-	"github.com/Open-MBEE/SysPI/internal/netrc"
 	"github.com/Open-MBEE/SysPI/internal/origin"
 	"github.com/Open-MBEE/SysPI/internal/project"
 	"github.com/Open-MBEE/SysPI/internal/vcs"
@@ -34,9 +34,10 @@ type Options struct {
 	// Offline refuses every network and repository access; the lock and
 	// lib/ must already satisfy the project.
 	Offline bool
-	// Index is the sysand static index (URL or directory) pkg:sysand/
-	// resources resolve through; empty means none configured.
-	Index string
+	// Indexes are the sysand indexes (URLs, URL templates or directories)
+	// pkg:sysand/ resources resolve through, tried in order; empty means
+	// none configured.
+	Indexes []string
 	// Log receives one line per action; nil discards.
 	Log io.Writer
 	// HTTP fetches remote archives and index files; nil uses http.DefaultClient.
@@ -75,6 +76,8 @@ type resolver struct {
 	stage string
 	items []staged
 	slots map[string]slot
+	// indexes are the opened sysand indexes, discovery done once per run.
+	indexes []*index.Index
 }
 
 type staged struct{ src, dst string }
@@ -87,9 +90,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		opts.Log = io.Discard
 	}
 	if opts.HTTP == nil {
-		c, err := netrc.Client()
+		c, err := httpauth.Client(func(msg string) { fmt.Fprintln(opts.Log, "warning:", msg) })
 		if err != nil {
-			return nil, fmt.Errorf("reading %s: %v", netrc.Path(), err)
+			return nil, err
 		}
 		opts.HTTP = c
 	}
@@ -414,7 +417,7 @@ func (r *resolver) download(url string, dst string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s: HTTP %s%s", url, resp.Status, index.AuthHint(resp.StatusCode, req.URL.Hostname()))
+		return fmt.Errorf("%s: HTTP %s%s", url, resp.Status, httpauth.Hint(resp.StatusCode, url, req.URL.Hostname()))
 	}
 	f, err := os.Create(dst)
 	if err != nil {
@@ -462,14 +465,29 @@ func (r *resolver) resolveRemoteArchive(o *origin.Origin, req request) (*lock.En
 	return e, r.installArchive(e, a, file)
 }
 
+// openIndexes runs discovery on every configured index once.
+func (r *resolver) openIndexes() ([]*index.Index, error) {
+	if r.indexes != nil {
+		return r.indexes, nil
+	}
+	for _, loc := range r.opts.Indexes {
+		x, err := index.Open(r.ctx, r.opts.HTTP, loc)
+		if err != nil {
+			return nil, fmt.Errorf("index %s: %v", loc, err)
+		}
+		r.indexes = append(r.indexes, x)
+	}
+	return r.indexes, nil
+}
+
 func (r *resolver) resolveIndex(o *origin.Origin, req request) (*lock.Entry, error) {
 	id := o.Identity()
 	old := r.locked(id, req.constraint)
 	if e, ok, err := r.reuseLocked(old); ok || err != nil {
 		return e, err
 	}
-	if r.opts.Index == "" {
-		return nil, fmt.Errorf("%s: usage %q: no sysand index configured (set SYSPI_INDEX or pass -index)", req.requester, req.resource)
+	if len(r.opts.Indexes) == 0 {
+		return nil, fmt.Errorf("%s: usage %q: no sysand index configured (set SYSPI_INDEX or SYSAND_INDEX, or pass -index)", req.requester, req.resource)
 	}
 	if r.opts.Offline {
 		return nil, fmt.Errorf("%s: usage %q: offline and not installed", req.requester, req.resource)
@@ -478,16 +496,31 @@ func (r *resolver) resolveIndex(o *origin.Origin, req request) (*lock.Entry, err
 	if err != nil {
 		return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
 	}
+	indexes, err := r.openIndexes()
+	if err != nil {
+		return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
+	}
 	var want *index.VersionEntry
-	if old != nil {
-		want = &index.VersionEntry{Version: old.Version, KparDigest: "sha256:" + old.SHA256}
-	} else {
-		vs, err := index.ReadVersions(r.ctx, r.opts.HTTP, r.opts.Index, o.Publisher, o.Name)
+	var from *index.Index
+	for _, x := range indexes {
+		vs, err := x.ReadVersions(r.ctx, o.Publisher, o.Name)
+		if errors.Is(err, index.ErrNotFound) {
+			continue
+		}
 		if err != nil {
-			if errors.Is(err, index.ErrNotFound) {
-				return nil, fmt.Errorf("%s: usage %q: %s is not in the index %s", req.requester, req.resource, id, r.opts.Index)
-			}
 			return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
+		}
+		from = x
+		if old != nil {
+			e, err := vs.Lookup(old.Version)
+			if err != nil {
+				return nil, fmt.Errorf("%s: usage %q: %s: %v (versions.json at `%s`)", req.requester, req.resource, id, err, x.Source(dir+"/versions.json"))
+			}
+			if e.KparDigest != "sha256:"+old.SHA256 {
+				return nil, fmt.Errorf("%s: usage %q: %s %s: the index now advertises %s but the lock records sha256:%s", req.requester, req.resource, id, old.Version, e.KparDigest, old.SHA256)
+			}
+			want = e
+			break
 		}
 		var avail []string
 		for _, e := range vs.Available() {
@@ -498,8 +531,12 @@ func (r *resolver) resolveIndex(o *origin.Origin, req request) (*lock.Entry, err
 			}
 		}
 		if want == nil {
-			return nil, fmt.Errorf("%s: usage %q: no version satisfies %s; available: %s", req.requester, req.resource, req.constraint, strings.Join(avail, ", "))
+			return nil, fmt.Errorf("%s: usage %q: no version satisfies %s; available in %s: %s", req.requester, req.resource, req.constraint, x.Location, strings.Join(avail, ", "))
 		}
+		break
+	}
+	if from == nil {
+		return nil, fmt.Errorf("%s: usage %q: %s is not in the index %s", req.requester, req.resource, id, strings.Join(r.opts.Indexes, ", "))
 	}
 	tmp, err := os.MkdirTemp("", "syspi-idx-*")
 	if err != nil {
@@ -507,7 +544,8 @@ func (r *resolver) resolveIndex(o *origin.Origin, req request) (*lock.Entry, err
 	}
 	defer os.RemoveAll(tmp)
 	file := filepath.Join(tmp, "project.kpar")
-	data, err := index.Fetch(r.ctx, r.opts.HTTP, r.opts.Index, dir+"/"+want.Version+"/project.kpar", project.MaxArchiveSize)
+	rel := dir + "/" + want.Version + "/project.kpar"
+	data, err := from.Fetch(r.ctx, rel, project.MaxArchiveSize)
 	if err != nil {
 		return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
 	}
@@ -528,8 +566,7 @@ func (r *resolver) resolveIndex(o *origin.Origin, req request) (*lock.Entry, err
 	if !strings.EqualFold(a.Project.Publisher, o.Publisher) || !strings.EqualFold(a.Project.Name, o.Name) {
 		return nil, fmt.Errorf("%s: usage %q: the index served %s/%s, not %s/%s", req.requester, req.resource, a.Project.Publisher, a.Project.Name, o.Publisher, o.Name)
 	}
-	src := strings.TrimSuffix(r.opts.Index, "/") + "/" + dir + "/" + want.Version + "/project.kpar"
-	e := &lock.Entry{Resource: id, Kind: lock.KindArchive, Publisher: a.Project.Publisher, Name: a.Project.Name, Version: a.Project.Version, Source: src, SHA256: a.SHA256}
+	e := &lock.Entry{Resource: id, Kind: lock.KindArchive, Publisher: a.Project.Publisher, Name: a.Project.Name, Version: a.Project.Version, Source: from.Source(rel), SHA256: a.SHA256}
 	return e, r.installArchive(e, a, file)
 }
 
