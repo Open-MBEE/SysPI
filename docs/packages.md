@@ -147,8 +147,8 @@ or a URL template holding exactly one `{path}` (the index-relative path percent-
 segment, `/` → `%2F`, for file APIs like GitLab's) or `{path_raw}` (literal `/`). Discovery
 fetches `<location>/sysand-index-config.json` first: absent (404) means the location itself is
 the index root; present, its `index_root` (URL or template) is where the files live and
-`api_root` (plain URL) is recorded for diagnostics and never called — SysPI has no publish or
-whoami. Relative, non-HTTP(S) or userinfo-bearing values are errors.
+`api_root` (plain URL) is recorded for diagnostics and unused by design — SysPI never calls it.
+Relative, non-HTTP(S) or userinfo-bearing values are errors.
 
 `versions.json` is validated as sysand validates it: every `version` a semantic version without
 build metadata, listed once, in descending precedence (`10.0.0-beta.1` before `10.0.0` is an
@@ -191,9 +191,7 @@ own HTTP downloads (index files, `.kpar` URLs) take credentials in this order:
    host and sent only to that host; a redirect elsewhere gets that host's entry or none.
 3. anonymous.
 
-Proxies come from the environment through `http.DefaultTransport`. Not implemented: sysand's
-keyring credential store and `sysand auth login/logout/whoami` (their blob format is theirs; use
-the variables above or netrc), `sysand publish`.
+Proxies come from the environment through `http.DefaultTransport`.
 
 Deliberately not done: no prompting (`GIT_TERMINAL_PROMPT=0`, `svn --non-interactive`), no
 credential storage or cache of SysPI's own, no credentials in URLs (`https://user:pw@…` is

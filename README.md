@@ -99,9 +99,8 @@ attached to each `v*` tag. Requires `git` (and `svn` / `hg` for packages hosted 
   (descending semver, no build metadata, `sha256:<64-hex>`, no duplicates, `removed` is a hard
   error, `yanked` is never newly selected); the index chain `-index`/`$SYSPI_INDEX`, then
   `$SYSAND_INDEX`, then `$SYSAND_DEFAULT_INDEX` (else `https://sysand.com`), all comma-separated,
-  `-no-index` to use none; and the `SYSAND_CRED_*` credential grammar below. Not honoured: the
-  keyring credential store and `sysand auth login/logout/whoami` (use `SYSAND_CRED_*` or netrc),
-  `sysand publish`, `sysand-lock.toml` as output.
+  `-no-index` to use none; and the `SYSAND_CRED_*` credential grammar below. `sysand-lock.toml`
+  is read as a hint and never written.
 
 ## Credentials
 

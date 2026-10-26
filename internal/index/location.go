@@ -175,7 +175,7 @@ type Endpoints struct {
 	// IndexRoot is where index.json and the per-project files live.
 	IndexRoot *Location
 	// APIRoot is the index API advertised by the discovery document, if
-	// any; recorded for diagnostics, never called (no publish, no whoami).
+	// any; recorded for diagnostics and unused by design, never called.
 	APIRoot string
 }
 
