@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -65,6 +66,11 @@ var ErrNoExecutable = errors.New("executable not found")
 // missing executable is reported as a clear ErrNoExecutable; any other
 // failure carries the command's stderr.
 func run(ctx context.Context, dir, name string, args ...string) (string, error) {
+	return runIn(ctx, dir, nil, name, args...)
+}
+
+// runIn is run with stdin supplied (svn reads a netrc password from it).
+func runIn(ctx context.Context, dir string, stdin io.Reader, name string, args ...string) (string, error) {
 	path, err := exec.LookPath(name)
 	if err != nil {
 		return "", fmt.Errorf("%w: %q is required to resolve this package but is not on PATH", ErrNoExecutable, name)
@@ -78,7 +84,7 @@ func run(ctx context.Context, dir, name string, args ...string) (string, error) 
 	)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
-	cmd.Stdin = nil
+	cmd.Stdin = stdin
 	out, err := cmd.Output()
 	if err != nil {
 		msg := strings.TrimSpace(stderr.String())
@@ -101,7 +107,7 @@ func AuthHint(name, msg string) string {
 		}
 	case "svn":
 		if strings.Contains(msg, "E170001") || strings.Contains(msg, "E215004") {
-			return "\n  hint: svn needs credentials for this repository and syspi runs it --non-interactive; run `svn ls <url>` once interactively so svn caches them"
+			return "\n  hint: svn needs credentials for this repository and syspi runs it --non-interactive; add `machine <host> login <user> password <secret>` to your netrc ($NETRC, else ~/.netrc; svn 1.14+), or run `svn ls <url>` once interactively so svn caches them, or use svn+ssh://"
 		}
 	case "hg":
 		if strings.Contains(msg, "authorization failed") || strings.Contains(msg, "http error 401") || strings.Contains(msg, "authorization required") {

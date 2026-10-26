@@ -109,9 +109,11 @@ configuration, and credentials never enter `.project.json`, the lock or a log (U
   (`git config --global credential.helper …`) or use an SSH remote.
 - **hg** — the user's `hg` runs with `HGPLAIN=1`, which keeps `[auth]`: add `prefix`, `username`,
   `password` for the host to your hgrc.
-- **svn** — the user's `svn` runs `--non-interactive`: run `svn ls <url>` once interactively so it
-  caches the credentials, or use `svn+ssh://`. Builds with plaintext password storage disabled
-  (Debian, Ubuntu) cache the username only; use `svn+ssh://` or a keyring store there.
+- **svn** — the user's `svn` runs `--non-interactive`. A netrc entry for the repository host
+  (`$NETRC`, else `~/.netrc`) is passed as `--username <login> --password-from-stdin
+  --no-auth-cache` (svn 1.14+; the password travels on stdin, never in argv, the environment or
+  the auth cache), so CI boxes and containers without a keyring work. Otherwise svn's own cached
+  credentials apply (`svn ls <url>` once interactively), or use `svn+ssh://`.
 - **HTTP** (sysand index files, `.kpar` URLs) — first sysand's environment grammar:
   `SYSAND_CRED_<LABEL>=<URL glob>` with `SYSAND_CRED_<LABEL>_BEARER_TOKEN` or
   `SYSAND_CRED_<LABEL>_BASIC_USER` + `SYSAND_CRED_<LABEL>_BASIC_PASS` (`*` and `?` stop at `/`,

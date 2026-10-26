@@ -160,7 +160,13 @@ the project.
 ## Credentials
 
 SysPI shells out to the user's `git`, `svn` and `hg` with the user's environment, so their
-credential helpers, SSH agents, hgrc `[auth]` sections and svn auth caches apply unchanged; its
+credential helpers, SSH agents, hgrc `[auth]` sections and svn auth caches apply unchanged. For
+svn over `svn://` or `http(s)://` it additionally reads the netrc (same lookup as below) for the
+repository host and, when an entry exists and svn is 1.14 or newer, runs
+`svn --username <login> --password-from-stdin --no-auth-cache …` with the password on stdin —
+never an argument, never in the environment, never written to `~/.subversion/auth`; an older svn
+runs as before and the hint points at the cache or `svn+ssh://`. Debian and Ubuntu build svn
+without plaintext password storage, so on CI boxes and containers the netrc is the way. Its
 own HTTP downloads (index files, `.kpar` URLs) take credentials in this order:
 
 1. sysand's environment grammar, read verbatim so a sysand user's CI variables work unchanged:
@@ -187,17 +193,17 @@ refused), nothing credential-like in `.project.json`, the lock or the output (UR
 redacted from error text).
 
 Authentication failures carry one hint each: git `could not read Username` / `Authentication
-failed` → configure a credential helper or use an SSH remote; svn `E170001` / `E215004` → run
-`svn ls <url>` once interactively so svn caches the credentials (on builds without plaintext
-password storage, Debian and Ubuntu among them, the cache holds only the username — use
-`svn+ssh://` or a keyring store); hg `authorization failed` / `http error 401` → add an `[auth]`
+failed` → configure a credential helper or use an SSH remote; svn `E170001` / `E215004` → a
+netrc entry for the host (svn 1.14+), or `svn ls <url>` once interactively so svn caches the
+credentials (on builds without plaintext password storage, Debian and Ubuntu among them, the
+cache holds only the username), or `svn+ssh://`; hg `authorization failed` / `http error 401` → add an `[auth]`
 section to hgrc (`HGPLAIN=1` does not disable it); HTTP 401 / 403 → a `SYSAND_CRED_*` group
 matching the URL or a netrc entry for the host.
 
 `tests/e2e/auth_test.go` proves each path against local servers: git over dumb HTTP behind Basic
 auth with a credential helper configured through `GIT_CONFIG_*`, hg over `static-http://` with an
-`[auth]` section in `HGRCPATH`, svn against `svnserve` with `anon-access = none` and a seeded
-auth cache, and the index and `.kpar` downloads behind Basic auth with a netrc.
+`[auth]` section in `HGRCPATH`, svn against `svnserve` with `anon-access = none` and a netrc
+entry (no auth cache written, wrong password not echoed, password not in argv), and the index and `.kpar` downloads behind Basic auth with a netrc.
 `tests/e2e/sysand_test.go` proves the sysand side: a discovery document whose `index_root` is a
 second server, bearer and Basic `SYSAND_CRED_*` groups (anonymous request first), an unmatched
 glob ending in 401 with a hint naming both mechanisms, a credential dropped on a cross-host

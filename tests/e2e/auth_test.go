@@ -116,7 +116,7 @@ func freePort(t *testing.T) int {
 	return l.Addr().(*net.TCPAddr).Port
 }
 
-func TestAuthSvnserveCachedCredentials(t *testing.T) {
+func TestAuthSvnNetrc(t *testing.T) {
 	requireOrSkip(t, "svn", "svnadmin", "svnserve")
 	bin := syspiBinary(t)
 	root := t.TempDir()
@@ -144,38 +144,43 @@ func TestAuthSvnserveCachedCredentials(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	// svn reads $HOME/.subversion; allow it to cache the password non-interactively.
+	// A fresh HOME: svn has no cached credentials and may write none.
 	home := filepath.Join(root, "home")
-	os.MkdirAll(filepath.Join(home, ".subversion"), 0o755)
-	os.WriteFile(filepath.Join(home, ".subversion", "servers"), []byte("[global]\nstore-passwords = yes\nstore-plaintext-passwords = yes\n"), 0o644)
-	os.WriteFile(filepath.Join(home, ".subversion", "config"), []byte("[auth]\npassword-stores =\nstore-passwords = yes\nstore-auth-creds = yes\n"), 0o644)
-	env := []string{"HOME=" + home}
+	os.MkdirAll(home, 0o755)
+	noNetrc := "NETRC=" + filepath.Join(root, "no-netrc")
 	app := initApp(t, root, "app-svn-nocred")
-	out, err := shErr(app, env, bin, "add", svnURL+"@1.0.0")
-	if err == nil || !strings.Contains(out, "hint: svn needs credentials") {
-		t.Fatalf("expected the svn auth hint: %v\n%s", err, out)
+	out, err := shErr(app, []string{"HOME=" + home, noNetrc}, bin, "add", svnURL+"@1.0.0")
+	if err == nil || !strings.Contains(out, "hint: svn needs credentials") || !strings.Contains(out, "netrc") || !strings.Contains(out, "svn+ssh://") {
+		t.Fatalf("expected the svn auth hint naming netrc: %v\n%s", err, out)
 	}
-	// Seed svn's own auth cache once, as the hint says, then syspi succeeds.
-	seed := exec.Command("svn", "--non-interactive", "--username", "alice", "--password", "s3cret", "ls", svnURL+"/tags")
-	seed.Env = append(os.Environ(), env...)
-	if o, err := seed.CombinedOutput(); err != nil {
-		t.Fatalf("seeding svn auth: %v\n%s", err, o)
-	}
-	cached, _ := filepath.Glob(filepath.Join(home, ".subversion", "auth", "svn.simple", "*"))
-	if len(cached) == 0 {
-		t.Fatalf("svn did not cache the credentials under %s", filepath.Join(home, ".subversion", "auth"))
-	}
-	if c, _ := os.ReadFile(cached[0]); !strings.Contains(string(c), "password") {
-		// Debian/Ubuntu build svn with plaintext password storage disabled: the
-		// cache holds the username only, so no non-interactive run can succeed.
-		t.Skip("this svn stores no plaintext passwords (built with --disable-plaintext-password-storage); the cache cannot carry them, see docs/packages.md Credentials")
-	}
-	app2 := initApp(t, root, "app-svn-cred")
-	if out, err := shErr(app2, env, bin, "add", svnURL+"@1.0.0"); err != nil {
-		t.Fatalf("add with cached credentials: %v\n%s", err, out)
+	netrcFile := filepath.Join(root, "netrc")
+	os.WriteFile(netrcFile, []byte("machine 127.0.0.1 login alice password s3cret\n"), 0o600)
+	app2 := initApp(t, root, "app-svn-netrc")
+	if out, err := shErr(app2, []string{"HOME=" + home, "NETRC=" + netrcFile}, bin, "add", svnURL+"@1.0.0"); err != nil {
+		t.Fatalf("add with netrc: %v\n%s", err, out)
 	}
 	if _, err := os.Stat(filepath.Join(app2, "lib", "acme-widgets_1.0.0", "Widgets.sysml")); err != nil {
 		t.Fatal(err)
+	}
+	if cached, _ := filepath.Glob(filepath.Join(home, ".subversion", "auth", "svn.simple", "*")); len(cached) != 0 {
+		t.Fatalf("--no-auth-cache: svn must not cache the netrc credentials, found %v", cached)
+	}
+	for _, f := range []string{".project.json", ".project.lock.json"} {
+		if b, _ := os.ReadFile(filepath.Join(app2, f)); strings.Contains(string(b), "s3cret") || strings.Contains(string(b), "alice") {
+			t.Fatalf("credentials in %s", f)
+		}
+	}
+	// A wrong password fails with the hint and never shows the secret.
+	os.WriteFile(netrcFile, []byte("machine 127.0.0.1 login alice password wr0ng\n"), 0o600)
+	out, err = shErr(initApp(t, root, "app-svn-wrong"), []string{"HOME=" + home, "NETRC=" + netrcFile}, bin, "add", svnURL+"@1.0.0")
+	if err == nil || !strings.Contains(out, "hint: svn needs credentials") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if strings.Contains(out, "wr0ng") {
+		t.Fatalf("password in the error text:\n%s", out)
+	}
+	if !strings.Contains(out, "--password-from-stdin") || strings.Contains(out, "--password ") {
+		t.Fatalf("the password must travel on stdin, not argv:\n%s", out)
 	}
 }
 
