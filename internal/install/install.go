@@ -584,8 +584,12 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 		return nil, fmt.Errorf("%s: usage %q: tag %s: %v", req.requester, req.resource, sel.Tag, err)
 	}
 	if hasMeta {
-		if err := project.VerifyChecksums(tree, meta); err != nil {
+		unrecorded, err := project.VerifyChecksums(tree, meta)
+		if err != nil {
 			return nil, fmt.Errorf("%s: usage %q: tag %s: %v", req.requester, req.resource, sel.Tag, err)
+		}
+		if len(unrecorded) > 0 {
+			r.logf("%s: tag %s: %s records no checksum for %d of %d files; their integrity rests on the tree hash", id, sel.Tag, project.MetaFile, len(unrecorded), len(unrecorded)+len(meta.Checksum))
 		}
 	}
 	p, err := project.ReadProject(tree)

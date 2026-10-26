@@ -24,14 +24,49 @@ type Checksum struct {
 	Algorithm string `json:"algorithm"`
 }
 
+// Checksums is the list of checksums recorded for one member. Table 13
+// specifies a list; sysand and the packages built with it write a single
+// object instead, so both shapes are read. Lists are written.
+type Checksums []Checksum
+
+// UnmarshalJSON accepts a list of checksum objects or one object.
+func (c *Checksums) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) > 0 && trimmed[0] == '{' {
+		var one Checksum
+		if err := json.Unmarshal(trimmed, &one); err != nil {
+			return err
+		}
+		*c = Checksums{one}
+		return nil
+	}
+	var list []Checksum
+	if err := json.Unmarshal(trimmed, &list); err != nil {
+		return err
+	}
+	*c = list
+	return nil
+}
+
+// Recorded reports whether the list carries a checksum that can be checked:
+// an "algorithm": "NONE" entry (sysand's placeholder) records nothing.
+func (c Checksums) Recorded() bool {
+	for _, s := range c {
+		if !strings.EqualFold(s.Algorithm, "NONE") {
+			return true
+		}
+	}
+	return false
+}
+
 // Meta is the interchange metadata of Table 13.
 type Meta struct {
-	Index           map[string]string     `json:"index"`
-	Created         string                `json:"created"`
-	Metamodel       string                `json:"metamodel,omitempty"`
-	IncludesDerived *bool                 `json:"includesDerived,omitempty"`
-	IncludesImplied *bool                 `json:"includesImplied,omitempty"`
-	Checksum        map[string][]Checksum `json:"checksum,omitempty"`
+	Index           map[string]string    `json:"index"`
+	Created         string               `json:"created"`
+	Metamodel       string               `json:"metamodel,omitempty"`
+	IncludesDerived *bool                `json:"includesDerived,omitempty"`
+	IncludesImplied *bool                `json:"includesImplied,omitempty"`
+	Checksum        map[string]Checksums `json:"checksum,omitempty"`
 }
 
 // SHA256 is the algorithm name this tool writes (Table 13, Note 6).
@@ -140,14 +175,14 @@ func GenerateMeta(dir string, created time.Time) (*Meta, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := &Meta{Index: map[string]string{}, Created: created.UTC().Format(time.RFC3339), Checksum: map[string][]Checksum{}}
+	m := &Meta{Index: map[string]string{}, Created: created.UTC().Format(time.RFC3339), Checksum: map[string]Checksums{}}
 	for _, rel := range members {
 		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
 		if err != nil {
 			return nil, err
 		}
 		sum := sha256.Sum256(data)
-		m.Checksum[rel] = []Checksum{{Value: hex.EncodeToString(sum[:]), Algorithm: SHA256}}
+		m.Checksum[rel] = Checksums{{Value: hex.EncodeToString(sum[:]), Algorithm: SHA256}}
 		if IsModelFile(rel) {
 			for _, name := range topLevelPackages(rel, data) {
 				if prev, dup := m.Index[name]; !dup || rel < prev {
@@ -190,40 +225,53 @@ func topLevelPackages(rel string, data []byte) []string {
 }
 
 // VerifyChecksums checks every checksum .meta.json records against the files
-// in dir and that every member has one. It returns the first mismatch.
-func VerifyChecksums(dir string, m *Meta) error {
+// in dir; Table 13 lets the metadata cover "some or all" of the files, so a
+// member without one is not an error. It returns the first mismatch and the
+// members that have no checksum that could be checked.
+func VerifyChecksums(dir string, m *Meta) (unrecorded []string, err error) {
 	members, err := Members(dir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	have := map[string]bool{}
 	for _, rel := range members {
 		have[rel] = true
 		sums, ok := m.Checksum[rel]
-		if !ok {
-			return fmt.Errorf("%s: %s records no checksum for %s", dir, MetaFile, rel)
+		if !ok || !sums.Recorded() {
+			unrecorded = append(unrecorded, rel)
+			continue
 		}
 		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if err := checkSums(rel, data, sums); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	for rel := range m.Checksum {
+	for _, rel := range sortedKeys(m.Checksum) {
 		if !have[rel] {
-			return fmt.Errorf("%s: %s records a checksum for %s, which is missing", dir, MetaFile, rel)
+			return nil, fmt.Errorf("%s: %s records a checksum for %s, which is missing", dir, MetaFile, rel)
 		}
 	}
-	return nil
+	return unrecorded, nil
+}
+
+func sortedKeys(m map[string]Checksums) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // checkSums verifies the recorded checksums this tool understands; an entry
 // with an algorithm it does not implement is an error, not a pass.
-func checkSums(rel string, data []byte, sums []Checksum) error {
+func checkSums(rel string, data []byte, sums Checksums) error {
 	for _, c := range sums {
 		switch strings.ToUpper(strings.ReplaceAll(c.Algorithm, "-", "")) {
+		case "NONE":
 		case "SHA256":
 			sum := sha256.Sum256(data)
 			if !strings.EqualFold(hex.EncodeToString(sum[:]), c.Value) {

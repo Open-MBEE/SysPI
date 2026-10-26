@@ -5,6 +5,7 @@ package project
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,23 +77,40 @@ func TestProjectAndMeta(t *testing.T) {
 			t.Errorf("checksum for excluded %s", rel)
 		}
 	}
-	if err := VerifyChecksums(dir, m); err != nil {
-		t.Fatal(err)
+	if un, err := VerifyChecksums(dir, m); err != nil || len(un) != 0 {
+		t.Fatal(err, un)
 	}
 	writeFile(t, dir, "README.md", "changed\n")
-	if err := VerifyChecksums(dir, m); err == nil || !strings.Contains(err.Error(), "checksum mismatch for README.md") {
+	if _, err := VerifyChecksums(dir, m); err == nil || !strings.Contains(err.Error(), "checksum mismatch for README.md") {
 		t.Fatalf("mismatch error = %v", err)
 	}
 	writeFile(t, dir, "README.md", "hi\n")
 	writeFile(t, dir, "new.sysml", "package New;")
-	if err := VerifyChecksums(dir, m); err == nil || !strings.Contains(err.Error(), "no checksum for new.sysml") {
-		t.Fatalf("unlisted member error = %v", err)
+	if un, err := VerifyChecksums(dir, m); err != nil || len(un) != 1 || un[0] != "new.sysml" {
+		t.Fatalf("unlisted member = %v %v", un, err)
 	}
-	m.Checksum["x"] = []Checksum{{Value: "00", Algorithm: "MD5"}}
+	m.Checksum["x"] = Checksums{{Value: "00", Algorithm: "MD5"}}
 	writeFile(t, dir, "x", "")
 	os.Remove(filepath.Join(dir, "new.sysml"))
-	if err := VerifyChecksums(dir, m); err == nil || !strings.Contains(err.Error(), "not supported") {
+	if _, err := VerifyChecksums(dir, m); err == nil || !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("unknown algorithm error = %v", err)
+	}
+	delete(m.Checksum, "x")
+	os.Remove(filepath.Join(dir, "x"))
+	m.Checksum["README.md"] = Checksums{{Value: "", Algorithm: "NONE"}}
+	if un, err := VerifyChecksums(dir, m); err != nil || len(un) != 1 || un[0] != "README.md" {
+		t.Fatalf("NONE entry = %v %v", un, err)
+	}
+	// sysand's object shape and the spec's list shape both parse.
+	var one, list Meta
+	if err := json.Unmarshal([]byte(`{"index":{},"created":"x","checksum":{"a":{"value":"v","algorithm":"SHA256"}}}`), &one); err != nil || len(one.Checksum["a"]) != 1 {
+		t.Fatalf("object shape: %v", err)
+	}
+	if err := json.Unmarshal([]byte(`{"index":{},"created":"x","checksum":{"a":[{"value":"v","algorithm":"SHA256"}]}}`), &list); err != nil || len(list.Checksum["a"]) != 1 {
+		t.Fatalf("list shape: %v", err)
+	}
+	if !strings.Contains(string(one.Marshal()), `"a": [`) {
+		t.Fatal("lists are not what is written")
 	}
 	t.Setenv("SOURCE_DATE_EPOCH", "1700000000")
 	if CreatedTime().Unix() != 1700000000 {
@@ -141,7 +159,7 @@ func TestBundleDeterministicAndOpen(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
-	if err := VerifyChecksums(dst, m); err != nil {
+	if _, err := VerifyChecksums(dst, m); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Extract(dst); err == nil {
@@ -193,8 +211,6 @@ func TestOpenArchiveRefusals(t *testing.T) {
 		"backslash":  {map[string]string{".project.json": string(projJSON), ".meta.json": metaJSON, `a\b.sysml`: "x"}, "backslashes"},
 		"mismatch": {map[string]string{".project.json": string(projJSON), ".meta.json": metaJSON,
 			"README.md": "tampered\n", "Widgets.sysml": read("Widgets.sysml"), "sub/Extra.kerml": read("sub/Extra.kerml")}, "checksum mismatch for README.md"},
-		"unlisted": {map[string]string{".project.json": string(projJSON), ".meta.json": metaJSON,
-			"README.md": "hi\n", "Widgets.sysml": read("Widgets.sysml"), "sub/Extra.kerml": read("sub/Extra.kerml"), "extra.sysml": "x"}, "no checksum for extra.sysml"},
 		"missing member": {map[string]string{".project.json": string(projJSON), ".meta.json": metaJSON}, "not in the archive"},
 		"bad project":    {map[string]string{".project.json": `{"name":"x"}`, ".meta.json": metaJSON}, `"version" is required`},
 	}
@@ -209,6 +225,13 @@ func TestOpenArchiveRefusals(t *testing.T) {
 		if !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: error %q lacks %q", name, err, tc.want)
 		}
+	}
+	un := rawZip(t, map[string]string{".project.json": string(projJSON), ".meta.json": metaJSON,
+		"README.md": "hi\n", "Widgets.sysml": read("Widgets.sysml"), "sub/Extra.kerml": read("sub/Extra.kerml"), "extra.sysml": "x"})
+	if ua, err := OpenArchive(un); err != nil || len(ua.Unrecorded) != 1 || ua.Unrecorded[0] != "extra.sysml" {
+		t.Fatalf("unlisted member: %v", err)
+	} else {
+		ua.Close()
 	}
 	if _, err := OpenArchive(filepath.Join(good, ".project.json")); err == nil || !strings.Contains(err.Error(), "not a readable ZIP") {
 		t.Errorf("non-zip error = %v", err)

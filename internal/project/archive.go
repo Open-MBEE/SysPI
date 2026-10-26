@@ -39,8 +39,10 @@ type Archive struct {
 	SHA256 string
 	// Members are the model-file member paths, sorted.
 	Members []string
-	rc      *zip.ReadCloser
-	byName  map[string]*zip.File
+	// Unrecorded are the members .meta.json records no checksum for.
+	Unrecorded []string
+	rc         *zip.ReadCloser
+	byName     map[string]*zip.File
 }
 
 // Close releases the archive.
@@ -145,7 +147,8 @@ func (a *Archive) readMetaFiles() (bool, error) {
 	return true, nil
 }
 
-// verify checks every recorded checksum and that every member has one.
+// verify checks every recorded checksum; members the metadata does not
+// cover are listed in Unrecorded (Table 13 allows "some or all").
 func (a *Archive) verify() error {
 	names := make([]string, 0, len(a.byName))
 	for name := range a.byName {
@@ -157,8 +160,9 @@ func (a *Archive) verify() error {
 	for _, name := range names {
 		f := a.byName[name]
 		sums, ok := a.Meta.Checksum[name]
-		if !ok {
-			return fmt.Errorf("%s: %s records no checksum for %s", a.Path, MetaFile, name)
+		if !ok || !sums.Recorded() {
+			a.Unrecorded = append(a.Unrecorded, name)
+			continue
 		}
 		data, err := a.readMember(f, MaxArchiveSize)
 		if err != nil {
