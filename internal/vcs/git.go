@@ -77,7 +77,14 @@ func (g *gitSource) Export(ctx context.Context, v Version, dst string) error {
 	defer os.RemoveAll(scratch)
 	clone := filepath.Join(scratch, "repo")
 	if _, err := run(ctx, "", "git", "-c", "advice.detachedHead=false", "clone", "--quiet", "--depth", "1", "--branch", v.Tag, "--", g.url, clone); err != nil {
-		return err
+		if !strings.Contains(err.Error(), "shallow") {
+			return err
+		}
+		// A dumb HTTP remote cannot serve a shallow clone; take the full history.
+		os.RemoveAll(clone)
+		if _, err := run(ctx, "", "git", "-c", "advice.detachedHead=false", "clone", "--quiet", "--branch", v.Tag, "--", g.url, clone); err != nil {
+			return err
+		}
 	}
 	if err := os.RemoveAll(filepath.Join(clone, ".git")); err != nil {
 		return err

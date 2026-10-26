@@ -20,6 +20,7 @@ import (
 	"github.com/Open-MBEE/SysPI/internal/digest"
 	"github.com/Open-MBEE/SysPI/internal/index"
 	"github.com/Open-MBEE/SysPI/internal/lock"
+	"github.com/Open-MBEE/SysPI/internal/netrc"
 	"github.com/Open-MBEE/SysPI/internal/origin"
 	"github.com/Open-MBEE/SysPI/internal/project"
 	"github.com/Open-MBEE/SysPI/internal/vcs"
@@ -86,7 +87,11 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		opts.Log = io.Discard
 	}
 	if opts.HTTP == nil {
-		opts.HTTP = http.DefaultClient
+		c, err := netrc.Client()
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %v", netrc.Path(), err)
+		}
+		opts.HTTP = c
 	}
 	root, err := filepath.Abs(opts.Root)
 	if err != nil {
@@ -409,7 +414,7 @@ func (r *resolver) download(url string, dst string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s: HTTP %s", url, resp.Status)
+		return fmt.Errorf("%s: HTTP %s%s", url, resp.Status, index.AuthHint(resp.StatusCode, req.URL.Hostname()))
 	}
 	f, err := os.Create(dst)
 	if err != nil {

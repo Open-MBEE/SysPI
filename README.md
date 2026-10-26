@@ -89,6 +89,25 @@ attached to each `v*` tag. Requires `git` (and `svn` / `hg` for packages hosted 
   (`sysand --index <url>`); SysPI resolves `pkg:sysand/<publisher>/<name>` from any
   sysand static index (`<index>/<publisher>/<name>/versions.json`).
 
+## Credentials
+
+SysPI never prompts and keeps no credential store of its own; each backend uses the user's own
+configuration, and credentials never enter `.project.json`, the lock or a log (URLs with
+`user:password@` are refused).
+
+- **git** — the user's `git` runs with `GIT_TERMINAL_PROMPT=0`; configure a credential helper
+  (`git config --global credential.helper …`) or use an SSH remote.
+- **hg** — the user's `hg` runs with `HGPLAIN=1`, which keeps `[auth]`: add `prefix`, `username`,
+  `password` for the host to your hgrc.
+- **svn** — the user's `svn` runs `--non-interactive`: run `svn ls <url>` once interactively so it
+  caches the credentials, or use `svn+ssh://`. Builds with plaintext password storage disabled
+  (Debian, Ubuntu) cache the username only; use `svn+ssh://` or a keyring store there.
+- **HTTP** (sysand index files, `.kpar` URLs) — HTTP Basic from your netrc: `$NETRC` if set, else
+  `~/.netrc` (`%USERPROFILE%\_netrc` on Windows), matched by host and never sent to another host
+  on a redirect. Proxy settings come from the environment (`HTTPS_PROXY`, `NO_PROXY`).
+
+An authentication failure is reported with one hint naming the fix for that backend.
+
 ## Future
 
 Design only, not built here: a SysML-rendered index; LSP integration; attestation / cosign of

@@ -137,3 +137,30 @@ resources resolve through the index named by `-index` or `$SYSPI_INDEX`.
 checked-out git or hg revision, otherwise the current time; so a bundle of an unchanged checkout
 is byte-identical across runs. The output file is never a member of itself when written inside
 the project.
+
+## Credentials
+
+SysPI shells out to the user's `git`, `svn` and `hg` with the user's environment, so their
+credential helpers, SSH agents, hgrc `[auth]` sections and svn auth caches apply unchanged; its
+own HTTP downloads (index files, `.kpar` URLs) take HTTP Basic credentials from the netrc file
+(`$NETRC`, else `~/.netrc` / `%USERPROFILE%\_netrc`), matched by host and sent only to that
+host — Go's client strips `Authorization` on a cross-host redirect and SysPI applies the netrc
+per request host, so a redirect elsewhere gets that host's entry or none. Proxies come from the
+environment through `http.DefaultTransport`.
+
+Deliberately not done: no prompting (`GIT_TERMINAL_PROMPT=0`, `svn --non-interactive`), no
+credential storage or cache of SysPI's own, no credentials in URLs (`https://user:pw@…` is
+refused), nothing credential-like in `.project.json`, the lock or the output (URL user-info is
+redacted from error text).
+
+Authentication failures carry one hint each: git `could not read Username` / `Authentication
+failed` → configure a credential helper or use an SSH remote; svn `E170001` / `E215004` → run
+`svn ls <url>` once interactively so svn caches the credentials (on builds without plaintext
+password storage, Debian and Ubuntu among them, the cache holds only the username — use
+`svn+ssh://` or a keyring store); hg `authorization failed` / `http error 401` → add an `[auth]`
+section to hgrc (`HGPLAIN=1` does not disable it); HTTP 401 / 403 → a netrc entry for the host.
+
+`tests/e2e/auth_test.go` proves each path against local servers: git over dumb HTTP behind Basic
+auth with a credential helper configured through `GIT_CONFIG_*`, hg over `static-http://` with an
+`[auth]` section in `HGRCPATH`, svn against `svnserve` with `anon-access = none` and a seeded
+auth cache, and the index and `.kpar` downloads behind Basic auth with a netrc.

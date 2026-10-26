@@ -150,7 +150,7 @@ func Parse(resource string) (*Origin, error) {
 	if strings.HasPrefix(res, "http://") || strings.HasPrefix(res, "https://") {
 		return parseHTTP(res)
 	}
-	if strings.HasPrefix(res, "ssh://") || strings.HasPrefix(res, "git+ssh://") || strings.HasPrefix(res, "git://") || strings.HasPrefix(res, "svn://") || strings.HasPrefix(res, "svn+ssh://") {
+	if strings.HasPrefix(res, "ssh://") || strings.HasPrefix(res, "git+ssh://") || strings.HasPrefix(res, "git://") || strings.HasPrefix(res, "svn://") || strings.HasPrefix(res, "svn+ssh://") || strings.HasPrefix(res, "static-http://") || strings.HasPrefix(res, "static-https://") {
 		return parseSchemeURL(res)
 	}
 	if rest, ok := strings.CutPrefix(res, "file://"); ok {
@@ -283,8 +283,11 @@ func parseSchemeURL(res string) (*Origin, error) {
 		return nil, fmt.Errorf("resource %q: not a valid URL", res)
 	}
 	vcs := "git"
-	if strings.HasPrefix(u.Scheme, "svn") {
+	switch {
+	case strings.HasPrefix(u.Scheme, "svn"):
 		vcs = "svn"
+	case strings.HasPrefix(u.Scheme, "static-http"):
+		vcs = "hg" // Mercurial's scheme for a repository on a plain file server
 	}
 	p := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(u.Path, "/"), "/"), ".git")
 	if p == "" {

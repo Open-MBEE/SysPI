@@ -85,9 +85,30 @@ func run(ctx context.Context, dir, name string, args ...string) (string, error) 
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", fmt.Errorf("%s %s: %s", name, strings.Join(redactAll(args), " "), redact(msg))
+		return "", fmt.Errorf("%s %s: %s%s", name, strings.Join(redactAll(args), " "), redact(msg), AuthHint(name, msg))
 	}
 	return string(out), nil
+}
+
+// AuthHint maps an executable's authentication failure to one actionable
+// line; "" when msg is not one. syspi never prompts and stores no
+// credentials of its own, so the user's own tool configuration is the fix.
+func AuthHint(name, msg string) string {
+	switch name {
+	case "git":
+		if strings.Contains(msg, "could not read Username") || strings.Contains(msg, "Authentication failed") || strings.Contains(msg, "could not read Password") {
+			return "\n  hint: git needs credentials for this remote and prompts are disabled (GIT_TERMINAL_PROMPT=0); configure a credential helper (git config --global credential.helper ...) or use an SSH remote"
+		}
+	case "svn":
+		if strings.Contains(msg, "E170001") || strings.Contains(msg, "E215004") {
+			return "\n  hint: svn needs credentials for this repository and syspi runs it --non-interactive; run `svn ls <url>` once interactively so svn caches them"
+		}
+	case "hg":
+		if strings.Contains(msg, "authorization failed") || strings.Contains(msg, "http error 401") || strings.Contains(msg, "authorization required") {
+			return "\n  hint: hg needs credentials for this repository; add an [auth] section (prefix, username, password) to your hgrc"
+		}
+	}
+	return ""
 }
 
 var userInfo = regexp.MustCompile(`(://)([^/@\s]+)@`)

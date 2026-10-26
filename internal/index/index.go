@@ -69,7 +69,7 @@ func Fetch(ctx context.Context, client *http.Client, root, rel string, limit int
 			return nil, fmt.Errorf("%s: %w", u, ErrNotFound)
 		}
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("%s: HTTP %s", u, resp.Status)
+			return nil, fmt.Errorf("%s: HTTP %s%s", u, resp.Status, AuthHint(resp.StatusCode, u.Hostname()))
 		}
 		data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 		if err != nil {
@@ -86,6 +86,16 @@ func Fetch(ctx context.Context, client *http.Client, root, rel string, limit int
 		return nil, fmt.Errorf("%s: %w", filepath.Join(root, rel), ErrNotFound)
 	}
 	return data, err
+}
+
+// AuthHint is the actionable line for an HTTP 401 or 403 from host: a netrc
+// entry ($NETRC, else ~/.netrc or %USERPROFILE%\_netrc) is how credentials
+// reach syspi's own downloads.
+func AuthHint(status int, host string) string {
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return fmt.Sprintf("\n  hint: the server wants credentials; add `machine %s login <user> password <secret>` to your netrc ($NETRC, else ~/.netrc)", host)
+	}
+	return ""
 }
 
 // ErrNotFound reports a document the index does not serve.

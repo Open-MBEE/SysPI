@@ -48,8 +48,14 @@ func (h *hgSource) Revision(ctx context.Context, v Version) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	id := strings.TrimSuffix(strings.TrimSpace(out), "+")
-	if !hgNode.MatchString(id) {
+	// --debug also prints authentication notes; the node is the last 40-hex line.
+	id := ""
+	for _, line := range strings.Split(out, "\n") {
+		if l := strings.TrimSuffix(strings.TrimSpace(line), "+"); hgNode.MatchString(l) {
+			id = l
+		}
+	}
+	if id == "" {
 		return "", fmt.Errorf("hg identify for tag %q of %s returned %q, not a changeset id", v.Tag, h.url, id)
 	}
 	return id, nil

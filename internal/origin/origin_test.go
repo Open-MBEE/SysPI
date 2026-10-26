@@ -31,6 +31,7 @@ func TestParseCanonical(t *testing.T) {
 		{"ssh://git@github.com:2222/acme/widgets.git", VCS, "git", "github.com", "acme/widgets", "", "", "ssh://git@github.com:2222/acme/widgets.git", "pkg:git/github.com/acme/widgets", "pkg:git/github.com/acme/widgets"},
 		{"git@github.com:acme/widgets.git@1.0.0", VCS, "git", "github.com", "acme/widgets", "", "1.0.0", "git@github.com:acme/widgets.git", "pkg:git/github.com/acme/widgets", "pkg:git/github.com/acme/widgets@1.0.0"},
 		{"git@github.com:acme/widgets.git#sub/dir", VCS, "git", "github.com", "acme/widgets", "sub/dir", "", "git@github.com:acme/widgets.git", "pkg:git/github.com/acme/widgets#sub/dir", "pkg:git/github.com/acme/widgets#sub/dir"},
+		{"static-http://hg.example.org/repo@1.0.0", VCS, "hg", "hg.example.org", "repo", "", "1.0.0", "static-http://hg.example.org/repo", "pkg:hg/hg.example.org/repo", "pkg:hg/hg.example.org/repo@1.0.0"},
 		{"svn+ssh://svn.example.org/repos/widgets@1.0.0", VCS, "svn", "svn.example.org", "repos/widgets", "", "1.0.0", "svn+ssh://svn.example.org/repos/widgets", "pkg:svn/svn.example.org/repos/widgets", "pkg:svn/svn.example.org/repos/widgets@1.0.0"},
 		{"file:///srv/git/widgets@1.0.0", VCS, "git", "", "/srv/git/widgets", "", "1.0.0", "/srv/git/widgets", "pkg:git//srv/git/widgets", "pkg:git//srv/git/widgets@1.0.0"},
 		{"/srv/git/widgets.git@1.0.0", VCS, "git", "", "/srv/git/widgets.git", "", "1.0.0", "/srv/git/widgets.git", "pkg:git//srv/git/widgets.git", "pkg:git//srv/git/widgets.git@1.0.0"},
