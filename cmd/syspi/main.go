@@ -175,7 +175,7 @@ func cmdInit(args []string, stdout, stderr io.Writer) error {
 	if err := m.Write(abs); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "initialised %s %s in %s (%s, %s)\n", p.InstallName(), "", *dir, project.ProjectFile, project.MetaFile)
+	fmt.Fprintf(stdout, "initialised %s in %s (%s, %s)\n", p.InstallName(), *dir, project.ProjectFile, project.MetaFile)
 	return nil
 }
 

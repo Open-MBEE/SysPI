@@ -61,10 +61,12 @@ Every project command takes `-C <dir>`, `-offline` and `-index <url|dir>` (defau
 
 ```sh
 $ syspi init -publisher acme -name rover
+initialised acme-rover_0.1.0 in . (.project.json, .meta.json)
 $ syspi add pkg:git/github.com/MBSE4U/sysmod-sysmlv2@5.1.5
+pkg:git/github.com/MBSE4U/sysmod-sysmlv2: tag 5.1.5: .meta.json records no checksum for 48 of 52 files; their integrity rests on the tree hash
 installed sysmod 5.1.5 (git 5.1.5 07286ecd2128b64f53fc3d05aee811e98b991a85) -> lib/mbse4u-sysmod_5.1.5
-1 package(s) locked: 1 installed, 0 already present, 0 not installed; .project.lock.json updated
-$ sysml -validate .          # OpenSysML finds lib/ on its own; no flags
+1 package(s) locked: 1 installed, 0 already present, 0 not installed (standard libraries and local directories); .project.lock.json updated
+$ sysml -validate Rover.sysml   # OpenSysML reads lib/ on its own; no flags
 ```
 
 `bundle` honours `SOURCE_DATE_EPOCH` for the `created` timestamp, so two builds of the same tree
