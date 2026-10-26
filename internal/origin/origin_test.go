@@ -26,6 +26,8 @@ func TestParseCanonical(t *testing.T) {
 		{"https://github.com/acme/widgets.git@1.0.0", VCS, "git", "github.com", "acme/widgets", "", "1.0.0", "https://github.com/acme/widgets.git", "pkg:git/github.com/acme/widgets", "pkg:git/github.com/acme/widgets@1.0.0"},
 		{"https://GitHub.com/acme/widgets", VCS, "git", "github.com", "acme/widgets", "", "", "https://GitHub.com/acme/widgets", "pkg:git/github.com/acme/widgets", "pkg:git/github.com/acme/widgets"},
 		{"ssh://git@github.com/acme/widgets.git@1.0.0", VCS, "git", "github.com", "acme/widgets", "", "1.0.0", "ssh://git@github.com/acme/widgets.git", "pkg:git/github.com/acme/widgets", "pkg:git/github.com/acme/widgets@1.0.0"},
+		{"https://example.org/team/repo.git@1.2.0#packages/core", VCS, "git", "example.org", "team/repo", "packages/core", "1.2.0", "https://example.org/team/repo.git", "pkg:git/example.org/team/repo#packages/core", "pkg:git/example.org/team/repo@1.2.0#packages/core"},
+		{"ssh://git@example.org/team/repo@1.2.0#packages/core", VCS, "git", "example.org", "team/repo", "packages/core", "1.2.0", "ssh://git@example.org/team/repo", "pkg:git/example.org/team/repo#packages/core", "pkg:git/example.org/team/repo@1.2.0#packages/core"},
 		{"ssh://git@github.com:2222/acme/widgets.git", VCS, "git", "github.com", "acme/widgets", "", "", "ssh://git@github.com:2222/acme/widgets.git", "pkg:git/github.com/acme/widgets", "pkg:git/github.com/acme/widgets"},
 		{"git@github.com:acme/widgets.git@1.0.0", VCS, "git", "github.com", "acme/widgets", "", "1.0.0", "git@github.com:acme/widgets.git", "pkg:git/github.com/acme/widgets", "pkg:git/github.com/acme/widgets@1.0.0"},
 		{"git@github.com:acme/widgets.git#sub/dir", VCS, "git", "github.com", "acme/widgets", "sub/dir", "", "git@github.com:acme/widgets.git", "pkg:git/github.com/acme/widgets#sub/dir", "pkg:git/github.com/acme/widgets#sub/dir"},
@@ -71,6 +73,7 @@ func TestParseRefusals(t *testing.T) {
 		{"file://host/share/w.kpar", "file:///path"},
 		{"", "empty resource"},
 		{"./w.kpar#core", "cannot have a #<subpath>"},
+		{"https://example.org/w.kpar#core", "cannot have a #<subpath>"},
 	}
 	for _, tc := range cases {
 		o, err := Parse(tc.in)

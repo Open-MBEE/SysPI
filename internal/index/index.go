@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Open-MBEE/SysPI/internal/project"
 	"github.com/Open-MBEE/SysPI/internal/version"
@@ -148,10 +149,10 @@ func (v *Versions) Available() []VersionEntry {
 // index rooted at root, creating it when absent. Every package needs a
 // publisher, as the pkg:sysand layout is keyed by publisher and name. It
 // returns the pkg:sysand IRIs written.
-func Emit(root string, packages []string) ([]string, error) {
+func Emit(root string, packages []string, created func(dir string) time.Time) ([]string, error) {
 	var iris []string
 	for _, pkg := range packages {
-		iri, err := emitOne(root, pkg)
+		iri, err := emitOne(root, pkg, created)
 		if err != nil {
 			return nil, err
 		}
@@ -163,7 +164,7 @@ func Emit(root string, packages []string) ([]string, error) {
 	return iris, nil
 }
 
-func emitOne(root, pkg string) (string, error) {
+func emitOne(root, pkg string, created func(dir string) time.Time) (string, error) {
 	kpar := pkg
 	if st, err := os.Stat(pkg); err != nil {
 		return "", err
@@ -174,7 +175,7 @@ func emitOne(root, pkg string) (string, error) {
 		}
 		defer os.RemoveAll(tmp)
 		kpar = filepath.Join(tmp, "project.kpar")
-		if _, err := project.Bundle(pkg, kpar, project.CreatedTime()); err != nil {
+		if _, err := project.Bundle(pkg, kpar, created(pkg)); err != nil {
 			return "", err
 		}
 	}

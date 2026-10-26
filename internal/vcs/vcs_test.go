@@ -226,6 +226,25 @@ func TestSelectAndErrors(t *testing.T) {
 	}
 }
 
+func TestRedactAndCheckedOutTime(t *testing.T) {
+	if got := redact("git clone -- https://user:secret@host/repo.git"); got != "git clone -- https://***@host/repo.git" {
+		t.Fatalf("redact = %q", got)
+	}
+	src, _ := Open("git", "https://user:secret@no-such-host.invalid/repo.git")
+	if _, err := src.ListVersions(context.Background()); err == nil || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("credentials in error: %v", err)
+	}
+	bare := gitFixture(t)
+	work := filepath.Join(filepath.Dir(bare), "work")
+	tm, ok := CheckedOutTime(context.Background(), work)
+	if !ok || tm.IsZero() || tm.Year() < 2020 {
+		t.Fatalf("CheckedOutTime = %v %v", tm, ok)
+	}
+	if _, ok := CheckedOutTime(context.Background(), t.TempDir()); ok {
+		t.Fatal("plain directory has a checkout time")
+	}
+}
+
 func TestGitRefusals(t *testing.T) {
 	ctx := context.Background()
 	src, _ := Open("git", filepath.Join(t.TempDir(), "missing.git"))

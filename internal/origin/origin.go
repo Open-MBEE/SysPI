@@ -242,7 +242,8 @@ func parseIndex(res, tail string) (*Origin, error) {
 }
 
 func parseHTTP(res string) (*Origin, error) {
-	spec, ver, err := cutVersion(res, res)
+	spec, sub := cutFragment(res)
+	spec, ver, err := cutVersion(res, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -251,6 +252,9 @@ func parseHTTP(res string) (*Origin, error) {
 		return nil, fmt.Errorf("resource %q: not a valid URL", res)
 	}
 	if strings.HasSuffix(strings.ToLower(u.Path), ".kpar") {
+		if sub != "" {
+			return nil, fmt.Errorf("resource %q: a .kpar cannot have a #<subpath>", res)
+		}
 		kind := RemoteArchive
 		if strings.EqualFold(u.Host, standardHost) {
 			kind = Standard
@@ -260,8 +264,6 @@ func parseHTTP(res string) (*Origin, error) {
 	if u.User != nil || u.RawQuery != "" {
 		return nil, fmt.Errorf("resource %q: a repository URL must not carry credentials or a query", res)
 	}
-	spec, sub := cutFragment(spec)
-	u.Fragment = ""
 	p := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(u.Path, "/"), "/"), ".git")
 	if p == "" {
 		return nil, fmt.Errorf("resource %q: repository URL has no path", res)
@@ -271,11 +273,11 @@ func parseHTTP(res string) (*Origin, error) {
 
 // parseSchemeURL handles ssh://, git://, svn:// and their + variants.
 func parseSchemeURL(res string) (*Origin, error) {
-	spec, ver, err := cutVersion(res, res)
+	spec, sub := cutFragment(res)
+	spec, ver, err := cutVersion(res, spec)
 	if err != nil {
 		return nil, err
 	}
-	spec, sub := cutFragment(spec)
 	u, err := url.Parse(spec)
 	if err != nil || u.Host == "" {
 		return nil, fmt.Errorf("resource %q: not a valid URL", res)

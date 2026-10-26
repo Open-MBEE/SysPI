@@ -159,14 +159,16 @@ func (a *Archive) verify() error {
 	sort.Strings(names)
 	for _, name := range names {
 		f := a.byName[name]
+		// Every member is read: the ZIP CRC catches a damaged member even
+		// when the metadata records no checksum for it.
+		data, err := a.readMember(f, MaxArchiveSize)
+		if err != nil {
+			return err
+		}
 		sums, ok := a.Meta.Checksum[name]
 		if !ok || !sums.Recorded() {
 			a.Unrecorded = append(a.Unrecorded, name)
 			continue
-		}
-		data, err := a.readMember(f, MaxArchiveSize)
-		if err != nil {
-			return err
 		}
 		if err := checkSums(name, data, sums); err != nil {
 			return fmt.Errorf("%s: %v", a.Path, err)
@@ -293,11 +295,20 @@ func Bundle(dir, out string, created time.Time) (*Meta, error) {
 	if _, err := ReadProject(dir); err != nil {
 		return nil, err
 	}
-	meta, err := GenerateMeta(dir, created)
+	// The output itself is not a member when it is written inside the project.
+	var skip []string
+	if absDir, err := filepath.Abs(dir); err == nil {
+		if absOut, err := filepath.Abs(out); err == nil {
+			if rel, err := filepath.Rel(absDir, absOut); err == nil && !strings.HasPrefix(rel, "..") {
+				skip = append(skip, filepath.ToSlash(rel))
+			}
+		}
+	}
+	meta, err := GenerateMeta(dir, created, skip...)
 	if err != nil {
 		return nil, err
 	}
-	members, err := Members(dir)
+	members, err := Members(dir, skip...)
 	if err != nil {
 		return nil, err
 	}

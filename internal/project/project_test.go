@@ -137,6 +137,18 @@ func TestBundleDeterministicAndOpen(t *testing.T) {
 	if !bytes.Equal(b1, b2) {
 		t.Fatal("bundles differ")
 	}
+	// Output inside the project: a second build must not swallow the first.
+	in1 := filepath.Join(dir, "dist", "w.kpar")
+	if _, err := Bundle(dir, in1, created); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Bundle(dir, in1, created); err != nil {
+		t.Fatal(err)
+	}
+	if bi, _ := os.ReadFile(in1); !bytes.Equal(bi, b1) {
+		t.Fatal("bundle written inside the project differs")
+	}
+	os.RemoveAll(filepath.Join(dir, "dist"))
 	a, err := OpenArchive(out1)
 	if err != nil {
 		t.Fatal(err)
@@ -225,6 +237,21 @@ func TestOpenArchiveRefusals(t *testing.T) {
 		if !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: error %q lacks %q", name, err, tc.want)
 		}
+	}
+	// A damaged member without a recorded checksum is still caught by the ZIP CRC.
+	damaged := rawZip(t, map[string]string{".project.json": string(projJSON), ".meta.json": metaJSON,
+		"README.md": "hi\n", "Widgets.sysml": read("Widgets.sysml"), "sub/Extra.kerml": read("sub/Extra.kerml"), "extra.sysml": strings.Repeat("package Extra;\n", 50)})
+	raw, _ := os.ReadFile(damaged)
+	idx := bytes.LastIndex(raw, []byte("extra.sysml")) // the central directory entry; the local header is earlier
+	loc := bytes.Index(raw, []byte("extra.sysml"))
+	if loc < 0 || idx <= loc {
+		t.Fatal("fixture layout")
+	}
+	raw[loc+len("extra.sysml")+10] ^= 0xff // inside the deflate stream
+	os.WriteFile(damaged, raw, 0o644)
+	if da, err := OpenArchive(damaged); err == nil {
+		da.Close()
+		t.Fatal("damaged unrecorded member accepted")
 	}
 	un := rawZip(t, map[string]string{".project.json": string(projJSON), ".meta.json": metaJSON,
 		"README.md": "hi\n", "Widgets.sysml": read("Widgets.sysml"), "sub/Extra.kerml": read("sub/Extra.kerml"), "extra.sysml": "x"})

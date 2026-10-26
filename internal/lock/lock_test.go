@@ -10,11 +10,11 @@ import (
 
 func TestDeterministicRoundTrip(t *testing.T) {
 	a := New()
-	a.Put(Entry{Resource: "pkg:git/h/b", Kind: KindVCS, Name: "b", Version: "1.0.0", VCS: "git", Source: "https://h/b.git", Tag: "v1.0.0", Revision: "abc", SHA256: "01", Usage: []string{"z", "a"}})
+	a.Put(Entry{Resource: "pkg:git/h/b", Kind: KindVCS, Name: "b", Version: "1.0.0", VCS: "git", Source: "https://h/b.git", Tag: "v1.0.0", Revision: "abc", SHA256: "01", Usage: []Usage{{Resource: "z"}, {Resource: "a", VersionConstraint: "^1.0.0"}}})
 	a.Put(Entry{Resource: "pkg:git/h/a", Kind: KindVCS, Name: "a", Version: "2.0.0", VCS: "svn", Source: "https://h/a", Tag: "2.0.0", Revision: "7", SHA256: "02"})
 	b := New()
 	b.Put(Entry{Resource: "pkg:git/h/a", Kind: KindVCS, Name: "a", Version: "2.0.0", VCS: "svn", Source: "https://h/a", Tag: "2.0.0", Revision: "7", SHA256: "02"})
-	b.Put(Entry{Resource: "pkg:git/h/b", Kind: KindVCS, Name: "b", Version: "1.0.0", VCS: "git", Source: "https://h/b.git", Tag: "v1.0.0", Revision: "abc", SHA256: "01", Usage: []string{"a", "z"}})
+	b.Put(Entry{Resource: "pkg:git/h/b", Kind: KindVCS, Name: "b", Version: "1.0.0", VCS: "git", Source: "https://h/b.git", Tag: "v1.0.0", Revision: "abc", SHA256: "01", Usage: []Usage{{Resource: "a", VersionConstraint: "^1.0.0"}, {Resource: "z"}}})
 	if !bytes.Equal(a.Marshal(), b.Marshal()) {
 		t.Fatalf("insertion order changed bytes:\n%s\n%s", a.Marshal(), b.Marshal())
 	}
@@ -32,7 +32,7 @@ func TestDeterministicRoundTrip(t *testing.T) {
 	if !bytes.Equal(l.Marshal(), a.Marshal()) {
 		t.Fatal("round trip changed bytes")
 	}
-	if l.Find("pkg:git/h/b").Usage[0] != "a" {
+	if l.Find("pkg:git/h/b").Usage[0].Resource != "a" {
 		t.Fatal("usage not sorted")
 	}
 	a.Put(Entry{Resource: "pkg:git/h/a", Kind: KindVCS, Name: "a", Version: "2.1.0"})

@@ -266,7 +266,7 @@ func TestTransitiveAndConflict(t *testing.T) {
 	}
 	lk, _, _ := lock.Read(dir, project.LockFile)
 	w := lk.Find(wres)
-	if w.MetaGenerated || len(w.Usage) != 1 || w.Usage[0] != bres {
+	if w.MetaGenerated || len(w.Usage) != 1 || w.Usage[0].Resource != "pkg:git//"+filepath.ToSlash(base) || w.Usage[0].VersionConstraint != "^2.1.0" {
 		t.Fatalf("widgets entry %+v", w)
 	}
 	if b := lk.Find(bres); b == nil || b.Version != "2.1.0" || b.Tag != "2.1.0" {
@@ -277,6 +277,29 @@ func TestTransitiveAndConflict(t *testing.T) {
 	run(t, dir2, Options{})
 	dir3 := consumer(t, project.Usage{Resource: bres + "@2.0.0"}, project.Usage{Resource: wres + "@1.1.0"})
 	runErr(t, dir3, Options{}, "already resolved to 2.0.0")
+	// A reused (locked, installed) widgets keeps its ^2.1.0 on base: adding base@2.0.0 later still conflicts,
+	// and the failed run leaves lib/ and the lock as they were.
+	before := treeList(t, filepath.Join(dir, "lib"))
+	lockBefore, _ := os.ReadFile(filepath.Join(dir, project.LockFile))
+	p, _ := project.ReadProject(dir)
+	p.Usage = append([]project.Usage{{Resource: bres + "@2.0.0"}}, p.Usage...)
+	p.Write(dir)
+	runErr(t, dir, Options{}, "already resolved to 2.0.0")
+	if after := treeList(t, filepath.Join(dir, "lib")); strings.Join(after, "\n") != strings.Join(before, "\n") {
+		t.Fatalf("lib/ changed by a failing run:\n%v\n%v", before, after)
+	}
+	if lockAfter, _ := os.ReadFile(filepath.Join(dir, project.LockFile)); !bytes.Equal(lockBefore, lockAfter) {
+		t.Fatal("lock changed by a failing run")
+	}
+	// Two different repositories whose packages share publisher, name and version collide.
+	twin := t.TempDir()
+	git(t, twin, "init", "-q", "-b", "main")
+	write(t, twin, ".project.json", `{"name":"base","version":"2.1.0"}`+"\n")
+	write(t, twin, "Other.kerml", "package Other;\n")
+	git(t, twin, "add", "-A")
+	git(t, twin, "commit", "-q", "-m", "2.1.0")
+	git(t, twin, "tag", "2.1.0")
+	runErr(t, consumer(t, project.Usage{Resource: bres + "@2.1.0"}, project.Usage{Resource: "pkg:git/" + filepath.ToSlash(twin) + "@2.1.0"}), Options{}, "both install as lib/base_2.1.0 with different contents")
 	// LockOnly writes the lock and installs nothing.
 	dir4 := consumer(t, project.Usage{Resource: wres + "@1.1.0"})
 	res4, _ := run(t, dir4, Options{LockOnly: true})
@@ -301,7 +324,7 @@ func TestArchivesLocalDirAndIndex(t *testing.T) {
 	srv := httptest.NewServer(http.FileServer(http.Dir(filepath.Dir(kpar))))
 	defer srv.Close()
 	idx := t.TempDir()
-	if _, err := index.Emit(idx, []string{kpar}); err != nil {
+	if _, err := index.Emit(idx, []string{kpar}, func(string) time.Time { return time.Unix(0, 0) }); err != nil {
 		t.Fatal(err)
 	}
 	editable := t.TempDir()
@@ -321,7 +344,7 @@ func TestArchivesLocalDirAndIndex(t *testing.T) {
 		t.Fatal("installed archive differs")
 	}
 	lk, _, _ := lock.Read(dir, project.LockFile)
-	if e := lk.Find(srv.URL + "/acme-tools_3.1.0.kpar"); e == nil || e.Kind != lock.KindArchive || e.SHA256 != sum || e.Usage[0] != "https://www.omg.org/spec/SysML/20250201/Systems-Library.kpar" {
+	if e := lk.Find(srv.URL + "/acme-tools_3.1.0.kpar"); e == nil || e.Kind != lock.KindArchive || e.SHA256 != sum || e.Usage[0].Resource != "https://www.omg.org/spec/SysML/20250201/Systems-Library.kpar" {
 		t.Fatalf("remote entry %+v", e)
 	}
 	if e := lk.Find("pkg:sysand/acme/tools"); e == nil || e.Version != "3.1.0" || !strings.HasSuffix(e.Source, "/acme/tools/3.1.0/project.kpar") {
@@ -369,6 +392,20 @@ func tamper(t *testing.T, kpar string) string {
 		".project.json": a.Project.Marshal(),
 		".meta.json":    meta,
 		"Tools.sysml":   []byte("package Evil;\n"),
+	})
+	return out
+}
+
+// treeList lists every path under dir, sorted.
+func treeList(t *testing.T, dir string) []string {
+	t.Helper()
+	var out []string
+	filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err == nil {
+			rel, _ := filepath.Rel(dir, p)
+			out = append(out, filepath.ToSlash(rel))
+		}
+		return nil
 	})
 	return out
 }

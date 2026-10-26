@@ -6,7 +6,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // CheckedOutTag returns the version tag the working copy at dir has checked
@@ -30,4 +32,25 @@ func CheckedOutTag(ctx context.Context, dir string) string {
 		}
 	}
 	return ""
+}
+
+// CheckedOutTime returns the commit time of the working copy at dir (git or
+// hg) and true, or false when dir is not a checkout. It gives bundle a
+// reproducible "created" time when SOURCE_DATE_EPOCH is unset.
+func CheckedOutTime(ctx context.Context, dir string) (time.Time, bool) {
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil && Available("git") {
+		if out, err := run(ctx, dir, "git", "log", "-1", "--format=%ct"); err == nil {
+			if n, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64); err == nil {
+				return time.Unix(n, 0).UTC(), true
+			}
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".hg")); err == nil && Available("hg") {
+		if out, err := run(ctx, dir, "hg", "log", "-r", ".", "--template", "{date(date, '%s')}"); err == nil {
+			if n, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64); err == nil {
+				return time.Unix(n, 0).UTC(), true
+			}
+		}
+	}
+	return time.Time{}, false
 }

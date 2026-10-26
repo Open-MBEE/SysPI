@@ -45,8 +45,24 @@ type Entry struct {
 	// MetaGenerated records that the tag tree had no .meta.json and the
 	// installed copy carries one this tool generated (excluded from SHA256).
 	MetaGenerated bool `json:"metaGenerated,omitempty"`
-	// Usage lists the canonical resources this package's own .project.json uses.
-	Usage []string `json:"usage,omitempty"`
+	// Usage lists the usages this package's own .project.json declares, as
+	// declared, so an offline run can re-derive each constraint and transport.
+	Usage []Usage `json:"usage,omitempty"`
+}
+
+// Usage is one declared usage of a locked package.
+type Usage struct {
+	Resource          string `json:"resource"`
+	VersionConstraint string `json:"versionConstraint,omitempty"`
+}
+
+func sortUsages(u []Usage) {
+	sort.Slice(u, func(i, j int) bool {
+		if u[i].Resource != u[j].Resource {
+			return u[i].Resource < u[j].Resource
+		}
+		return u[i].VersionConstraint < u[j].VersionConstraint
+	})
 }
 
 // Lock is the lock file.
@@ -71,9 +87,9 @@ func (l *Lock) Find(resource string) *Entry {
 // Put adds or replaces the entry for e.Resource.
 func (l *Lock) Put(e Entry) {
 	if e.Usage == nil {
-		e.Usage = []string{}
+		e.Usage = []Usage{}
 	}
-	sort.Strings(e.Usage)
+	sortUsages(e.Usage)
 	if cur := l.Find(e.Resource); cur != nil {
 		*cur = e
 		return
@@ -87,9 +103,9 @@ func (l *Lock) Marshal() []byte {
 	sort.Slice(l.Packages, func(i, j int) bool { return l.Packages[i].Resource < l.Packages[j].Resource })
 	for i := range l.Packages {
 		if l.Packages[i].Usage == nil {
-			l.Packages[i].Usage = []string{}
+			l.Packages[i].Usage = []Usage{}
 		}
-		sort.Strings(l.Packages[i].Usage)
+		sortUsages(l.Packages[i].Usage)
 	}
 	if l.Packages == nil {
 		l.Packages = []Entry{}

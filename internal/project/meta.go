@@ -136,8 +136,13 @@ func IsModelFile(rel string) bool {
 }
 
 // Members lists the files of a project directory relative to it with "/"
-// separators, sorted, excluding version-control metadata and the lock file.
-func Members(dir string) ([]string, error) {
+// separators, sorted, excluding version-control metadata, the lock file and
+// the given skip paths.
+func Members(dir string, skip ...string) ([]string, error) {
+	skipped := map[string]bool{}
+	for _, s := range skip {
+		skipped[s] = true
+	}
 	var out []string
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -157,7 +162,7 @@ func Members(dir string) ([]string, error) {
 		if !d.Type().IsRegular() {
 			return fmt.Errorf("%s: not a regular file", rel)
 		}
-		if rel == LockFile || rel == MetaFile {
+		if rel == LockFile || rel == MetaFile || skipped[rel] {
 			return nil
 		}
 		out = append(out, rel)
@@ -170,8 +175,8 @@ func Members(dir string) ([]string, error) {
 // GenerateMeta builds the metadata for a project directory: an index of the
 // top-level package declarations of every textual model file and a SHA-256
 // checksum of every member except .meta.json itself.
-func GenerateMeta(dir string, created time.Time) (*Meta, error) {
-	members, err := Members(dir)
+func GenerateMeta(dir string, created time.Time, skip ...string) (*Meta, error) {
+	members, err := Members(dir, skip...)
 	if err != nil {
 		return nil, err
 	}

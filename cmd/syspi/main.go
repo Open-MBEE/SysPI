@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Open-MBEE/SysPI/internal/index"
 	"github.com/Open-MBEE/SysPI/internal/install"
@@ -315,7 +316,7 @@ func cmdBundle(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if *out == "" {
 		*out = p.InstallName() + project.ArchiveExt
 	}
-	meta, err := project.Bundle(dir, *out, project.CreatedTime())
+	meta, err := project.Bundle(dir, *out, createdFor(ctx, dir))
 	if err != nil {
 		return err
 	}
@@ -326,6 +327,19 @@ func cmdBundle(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	a.Close()
 	fmt.Fprintf(stdout, "wrote %s (%d members, sha256 %s, created %s)\n", *out, len(a.Members), a.SHA256, meta.Created)
 	return nil
+}
+
+// createdFor is the "created" time of a bundle: SOURCE_DATE_EPOCH when set,
+// else the commit time of the checked-out revision, else now — so a bundle
+// of an unchanged checkout is byte-identical across runs.
+func createdFor(ctx context.Context, dir string) time.Time {
+	if os.Getenv("SOURCE_DATE_EPOCH") != "" {
+		return project.CreatedTime()
+	}
+	if t, ok := vcs.CheckedOutTime(ctx, dir); ok {
+		return t
+	}
+	return project.CreatedTime()
 }
 
 func cmdIndex(args []string, stdout, stderr io.Writer) error {
@@ -342,7 +356,7 @@ func cmdIndex(args []string, stdout, stderr io.Writer) error {
 		fs.Usage()
 		return errUsage
 	}
-	iris, err := index.Emit(*out, fs.Args())
+	iris, err := index.Emit(*out, fs.Args(), func(dir string) time.Time { return createdFor(context.Background(), dir) })
 	if err != nil {
 		return err
 	}

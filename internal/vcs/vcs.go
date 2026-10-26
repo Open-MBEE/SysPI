@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -84,9 +85,23 @@ func run(ctx context.Context, dir, name string, args ...string) (string, error) 
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", fmt.Errorf("%s %s: %s", name, strings.Join(args, " "), msg)
+		return "", fmt.Errorf("%s %s: %s", name, strings.Join(redactAll(args), " "), redact(msg))
 	}
 	return string(out), nil
+}
+
+var userInfo = regexp.MustCompile(`(://)([^/@\s]+)@`)
+
+// redact strips the user-info part of any URL in s so credentials written
+// into a clone address never reach a log or an error.
+func redact(s string) string { return userInfo.ReplaceAllString(s, "${1}***@") }
+
+func redactAll(args []string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		out[i] = redact(a)
+	}
+	return out
 }
 
 // Available reports whether the executable for a system is on PATH.

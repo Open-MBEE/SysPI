@@ -69,8 +69,8 @@ installed sysmod 5.1.5 (git 5.1.5 07286ecd2128b64f53fc3d05aee811e98b991a85) -> l
 $ sysml -validate Rover.sysml   # OpenSysML reads lib/ on its own; no flags
 ```
 
-`bundle` honours `SOURCE_DATE_EPOCH` for the `created` timestamp, so two builds of the same tree
-are byte-identical.
+`bundle` takes its `created` timestamp from `SOURCE_DATE_EPOCH`, else from the checked-out git or
+hg commit, so two builds of the same tree are byte-identical.
 
 ## Install
 

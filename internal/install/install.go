@@ -69,7 +69,16 @@ type resolver struct {
 	queue  []request
 	res    *Result
 	libDir string
+	// stage holds newly fetched packages until every usage resolved; slots
+	// maps each lib/ destination to the resource and digest that claimed it.
+	stage string
+	items []staged
+	slots map[string]slot
 }
+
+type staged struct{ src, dst string }
+
+type slot struct{ resource, sha256 string }
 
 // Run resolves, locks and installs the project at opts.Root.
 func Run(ctx context.Context, opts Options) (*Result, error) {
@@ -95,7 +104,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if old == nil {
 		old = lock.New()
 	}
-	r := &resolver{ctx: ctx, opts: opts, proj: proj, old: old, fresh: lock.New(), chosen: map[string]*lock.Entry{}, res: &Result{}, libDir: filepath.Join(root, project.LibDir)}
+	r := &resolver{ctx: ctx, opts: opts, proj: proj, old: old, fresh: lock.New(), chosen: map[string]*lock.Entry{}, res: &Result{}, libDir: filepath.Join(root, project.LibDir), slots: map[string]slot{}}
 	for _, u := range proj.Usage {
 		c, err := usageConstraint(u)
 		if err != nil {
@@ -103,10 +112,24 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		}
 		r.queue = append(r.queue, request{resource: u.Resource, constraint: c, requester: project.ProjectFile})
 	}
+	defer func() {
+		if r.stage != "" {
+			os.RemoveAll(r.stage)
+		}
+	}()
 	for len(r.queue) > 0 {
 		req := r.queue[0]
 		r.queue = r.queue[1:]
 		if err := r.resolve(req); err != nil {
+			return nil, err
+		}
+	}
+	// Everything resolved and verified: publish the staged packages, then the lock.
+	for _, it := range r.items {
+		if err := os.RemoveAll(it.dst); err != nil {
+			return nil, err
+		}
+		if err := os.Rename(it.src, it.dst); err != nil {
 			return nil, err
 		}
 	}
@@ -140,6 +163,44 @@ func usageConstraint(u project.Usage) (version.Constraint, error) {
 		return version.Exact(v), nil
 	}
 	return version.Constraint{}, nil
+}
+
+// claim reserves a lib/ destination for a resource; two resources with the
+// same publisher, name and version may share it only with the same digest.
+func (r *resolver) claim(dst, resource, sha256 string) error {
+	if cur, ok := r.slots[dst]; ok && cur.resource != resource && cur.sha256 != sha256 {
+		return fmt.Errorf("%s and %s both install as %s with different contents (SHA-256 %s vs %s); rename one of the packages", cur.resource, resource, rel(r.opts.Root, dst), cur.sha256, sha256)
+	}
+	r.slots[dst] = slot{resource, sha256}
+	return nil
+}
+
+// alreadyStaged reports whether an identical package (claim verified the
+// digest) is already staged for dst.
+func (r *resolver) alreadyStaged(dst string) bool {
+	for _, it := range r.items {
+		if it.dst == dst {
+			return true
+		}
+	}
+	return false
+}
+
+// staging returns the directory new packages are written to before they
+// are published into lib/.
+func (r *resolver) staging() (string, error) {
+	if r.stage != "" {
+		return r.stage, nil
+	}
+	if err := os.MkdirAll(r.libDir, 0o755); err != nil {
+		return "", err
+	}
+	stage, err := os.MkdirTemp(r.libDir, ".syspi-stage-*")
+	if err != nil {
+		return "", err
+	}
+	r.stage = stage
+	return stage, nil
 }
 
 func (r *resolver) logf(format string, args ...any) {
@@ -194,11 +255,10 @@ func (r *resolver) enqueueUsages(e *lock.Entry, p *project.Project) error {
 		if err != nil {
 			return fmt.Errorf("%s: %v", e.Resource, err)
 		}
-		uo, err := origin.Parse(u.Resource)
-		if err != nil {
+		if _, err := origin.Parse(u.Resource); err != nil {
 			return fmt.Errorf("%s: usage %q: %v", e.Resource, u.Resource, err)
 		}
-		e.Usage = append(e.Usage, uo.Canonical())
+		e.Usage = append(e.Usage, lock.Usage{Resource: u.Resource, VersionConstraint: u.VersionConstraint})
 		r.queue = append(r.queue, request{resource: u.Resource, constraint: c, requester: e.Resource})
 	}
 	return nil
@@ -227,27 +287,33 @@ func (r *resolver) archivePath(p *project.Project) string {
 	return filepath.Join(r.libDir, p.InstallName()+project.ArchiveExt)
 }
 
-// installArchive copies a verified archive into lib/ unless an identical
+// installArchive stages a verified archive for lib/ unless an identical
 // copy is already there, and queues its usages.
 func (r *resolver) installArchive(e *lock.Entry, a *project.Archive, src string) error {
 	if r.opts.LockOnly {
 		return r.enqueueUsages(e, a.Project)
 	}
 	dst := r.archivePath(a.Project)
-	if cur, err := digest.File(dst); err == nil && cur == a.SHA256 {
+	if err := r.claim(dst, e.Resource, a.SHA256); err != nil {
+		return err
+	}
+	if cur, err := digest.File(dst); (err == nil && cur == a.SHA256) || r.alreadyStaged(dst) {
 		r.res.Reused = append(r.res.Reused, e.Resource)
 		return r.enqueueUsages(e, a.Project)
 	}
-	if err := os.MkdirAll(r.libDir, 0o755); err != nil {
+	stage, err := r.staging()
+	if err != nil {
 		return err
 	}
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(dst, data, 0o644); err != nil {
+	tmp := filepath.Join(stage, filepath.Base(dst))
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
+	r.items = append(r.items, staged{tmp, dst})
 	r.logf("installed %s %s -> %s", a.Project.Name, a.Project.Version, rel(r.opts.Root, dst))
 	r.res.Installed = append(r.res.Installed, e.Resource)
 	return r.enqueueUsages(e, a.Project)
@@ -290,39 +356,40 @@ func (r *resolver) locked(id string, c version.Constraint) *lock.Entry {
 
 // reuseLocked keeps a locked archive entry when only the lock is being
 // written, or when lib/ already holds the archive with the locked digest.
-func (r *resolver) reuseLocked(old *lock.Entry) (*lock.Entry, bool) {
+func (r *resolver) reuseLocked(old *lock.Entry) (*lock.Entry, bool, error) {
 	if old == nil {
-		return nil, false
+		return nil, false, nil
 	}
 	stem := (&project.Project{Name: old.Name, Publisher: old.Publisher, Version: old.Version}).InstallName()
 	dst := filepath.Join(r.libDir, stem+project.ArchiveExt)
 	cur, err := digest.File(dst)
 	if r.opts.LockOnly || (err == nil && cur == old.SHA256) {
+		if !r.opts.LockOnly {
+			if err := r.claim(dst, old.Resource, old.SHA256); err != nil {
+				return nil, false, err
+			}
+			r.res.Reused = append(r.res.Reused, old.Resource)
+		}
 		e := *old
 		e.Usage = nil
-		if !r.opts.LockOnly {
-			r.res.Reused = append(r.res.Reused, e.Resource)
-		}
-		r.requeueLocked(&e, old)
-		return &e, true
+		return &e, true, r.requeueLocked(&e, old)
 	}
-	return nil, false
+	return nil, false, nil
 }
 
-// requeueLocked queues the usages a locked entry recorded, so an offline
-// run walks the closure from the lock alone.
-func (r *resolver) requeueLocked(e *lock.Entry, old *lock.Entry) {
+// requeueLocked queues the usages a locked entry recorded — as declared, so
+// the constraint and the transport (an SSH address, say) are the package's
+// own — and an offline run walks the closure from the lock alone.
+func (r *resolver) requeueLocked(e *lock.Entry, old *lock.Entry) error {
 	for _, u := range old.Usage {
-		uo, err := origin.Parse(u)
-		c := version.Constraint{}
-		if err == nil && uo.Version != "" {
-			if v, err := version.Parse(uo.Version); err == nil {
-				c = version.Exact(v)
-			}
+		c, err := usageConstraint(project.Usage{Resource: u.Resource, VersionConstraint: u.VersionConstraint})
+		if err != nil {
+			return fmt.Errorf("%s: locked %v", e.Resource, err)
 		}
 		e.Usage = append(e.Usage, u)
-		r.queue = append(r.queue, request{resource: u, constraint: c, requester: e.Resource})
+		r.queue = append(r.queue, request{resource: u.Resource, constraint: c, requester: e.Resource})
 	}
+	return nil
 }
 
 func (r *resolver) download(url string, dst string) error {
@@ -359,8 +426,8 @@ func (r *resolver) download(url string, dst string) error {
 func (r *resolver) resolveRemoteArchive(o *origin.Origin, req request) (*lock.Entry, error) {
 	id := o.Identity()
 	old := r.locked(id, req.constraint)
-	if e, ok := r.reuseLocked(old); ok {
-		return e, nil
+	if e, ok, err := r.reuseLocked(old); ok || err != nil {
+		return e, err
 	}
 	tmp, err := os.MkdirTemp("", "syspi-dl-*")
 	if err != nil {
@@ -390,8 +457,8 @@ func (r *resolver) resolveRemoteArchive(o *origin.Origin, req request) (*lock.En
 func (r *resolver) resolveIndex(o *origin.Origin, req request) (*lock.Entry, error) {
 	id := o.Identity()
 	old := r.locked(id, req.constraint)
-	if e, ok := r.reuseLocked(old); ok {
-		return e, nil
+	if e, ok, err := r.reuseLocked(old); ok || err != nil {
+		return e, err
 	}
 	if r.opts.Index == "" {
 		return nil, fmt.Errorf("%s: usage %q: no sysand index configured (set SYSPI_INDEX or pass -index)", req.requester, req.resource)
@@ -474,30 +541,31 @@ func installedTreeMatches(dir string, old *lock.Entry) bool {
 	return err == nil && d == old.SHA256
 }
 
-// sysandInstalled looks for the package in .sysand/lib, which a sysand
-// user already has; it is read, never written.
-func (r *resolver) sysandInstalled(name, publisher, ver string) string {
+// sysandInstalled looks in .sysand/lib, which a sysand user already has
+// (read, never written), for a tree of the locked package whose digest is
+// the locked one; a copy with another digest is reported and not trusted.
+func (r *resolver) sysandInstalled(old *lock.Entry) string {
 	dir := filepath.Join(r.opts.Root, filepath.FromSlash(project.SysandLibDir))
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return ""
 	}
 	for _, ent := range entries {
-		p := filepath.Join(dir, ent.Name())
-		var pr *project.Project
-		if ent.IsDir() {
-			pr, err = project.ReadProject(p)
-		} else if project.IsArchiveFile(p) {
-			a, aerr := project.OpenArchive(p)
-			if aerr == nil {
-				pr = a.Project
-				a.Close()
-			}
-			err = aerr
+		if !ent.IsDir() {
+			continue
 		}
-		if err == nil && pr != nil && pr.Name == name && pr.Version == ver && (publisher == "" || pr.Publisher == "" || pr.Publisher == publisher) {
+		p := filepath.Join(dir, ent.Name())
+		pr, err := project.ReadProject(p)
+		if err != nil || pr.Name != old.Name || pr.Version != old.Version || (old.Publisher != "" && pr.Publisher != "" && pr.Publisher != old.Publisher) {
+			continue
+		}
+		if installedTreeMatches(p, old) {
 			return p
 		}
+		if d, err := digest.TreeExcept(p, project.MetaFile); err == nil && d == old.SHA256 {
+			return p
+		}
+		r.logf("%s %s at %s does not have the locked tree SHA-256 %s; installing under %s instead", old.Name, old.Version, rel(r.opts.Root, p), old.SHA256, project.LibDir)
 	}
 	return ""
 }
@@ -507,27 +575,28 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 	old := r.locked(id, req.constraint)
 	if old != nil && !r.opts.LockOnly {
 		stem := (&project.Project{Name: old.Name, Publisher: old.Publisher, Version: old.Version}).InstallName()
-		if installedTreeMatches(filepath.Join(r.libDir, stem), old) {
+		dst := filepath.Join(r.libDir, stem)
+		if installedTreeMatches(dst, old) {
+			if err := r.claim(dst, id, old.SHA256); err != nil {
+				return nil, err
+			}
 			e := *old
 			e.Usage = nil
 			r.res.Reused = append(r.res.Reused, id)
-			r.requeueLocked(&e, old)
-			return &e, nil
+			return &e, r.requeueLocked(&e, old)
 		}
-		if p := r.sysandInstalled(old.Name, old.Publisher, old.Version); p != "" {
+		if p := r.sysandInstalled(old); p != "" {
 			r.logf("%s %s already installed by sysand at %s", old.Name, old.Version, rel(r.opts.Root, p))
 			e := *old
 			e.Usage = nil
 			r.res.Reused = append(r.res.Reused, id)
-			r.requeueLocked(&e, old)
-			return &e, nil
+			return &e, r.requeueLocked(&e, old)
 		}
 	}
 	if old != nil && r.opts.LockOnly {
 		e := *old
 		e.Usage = nil
-		r.requeueLocked(&e, old)
-		return &e, nil
+		return &e, r.requeueLocked(&e, old)
 	}
 	if r.opts.Offline {
 		return nil, fmt.Errorf("%s: usage %q: offline and %s is not installed under %s", req.requester, req.resource, id, project.LibDir)
@@ -556,11 +625,11 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 	if old != nil && old.Revision != "" && old.Revision != revision && o.VCS != "svn" {
 		return nil, fmt.Errorf("%s: usage %q: tag %s of %s now points at %s %s, the lock recorded %s", req.requester, req.resource, sel.Tag, o.Source, o.VCS, revision, old.Revision)
 	}
-	scratchParent := r.libDir
-	if r.opts.LockOnly {
-		scratchParent = ""
-	} else if err := os.MkdirAll(r.libDir, 0o755); err != nil {
-		return nil, err
+	scratchParent := ""
+	if !r.opts.LockOnly {
+		if scratchParent, err = r.staging(); err != nil {
+			return nil, err
+		}
 	}
 	scratch, err := os.MkdirTemp(scratchParent, ".syspi-fetch-*")
 	if err != nil {
@@ -626,12 +695,21 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 		r.logf("%s %s: tag %s has no %s; generated one for the installed copy", p.Name, p.Version, sel.Tag, project.MetaFile)
 	}
 	dst := treePath(r.libDir, p)
-	if err := os.RemoveAll(dst); err != nil {
+	if err := r.claim(dst, id, sum); err != nil {
 		return nil, err
 	}
-	if err := os.Rename(tree, dst); err != nil {
+	if r.alreadyStaged(dst) {
+		r.res.Reused = append(r.res.Reused, id)
+		return e, r.enqueueUsages(e, p)
+	}
+	stagedTree := filepath.Join(r.stage, p.InstallName())
+	if err := os.RemoveAll(stagedTree); err != nil {
 		return nil, err
 	}
+	if err := os.Rename(tree, stagedTree); err != nil {
+		return nil, err
+	}
+	r.items = append(r.items, staged{stagedTree, dst})
 	r.logf("installed %s %s (%s %s %s) -> %s", p.Name, p.Version, o.VCS, sel.Tag, revision, rel(r.opts.Root, dst))
 	r.res.Installed = append(r.res.Installed, id)
 	return e, r.enqueueUsages(e, p)

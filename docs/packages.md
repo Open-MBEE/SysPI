@@ -90,16 +90,22 @@ indented, keys in a fixed order:
       "tag": "5.1.5",
       "revision": "07286ecd2128b64f53fc3d05aee811e98b991a85",
       "sha256": "…64 hex…",
-      "usage": []
+      "usage": [
+        { "resource": "git@private.example:team/core.git", "versionConstraint": "^1.0.0" }
+      ]
     }
   ]
 }
 ```
 
 `kind` is `vcs`, `archive` (a `.kpar`), `local` (an editable directory, read in place) or
-`standard` (an OMG standard-library IRI; recorded, never installed). `usage` lists the canonical
-resources the package's own `.project.json` declares, so an offline run walks the closure from the
-lock alone. A lock entry wins over the constraint in `.project.json` as long as it satisfies it;
+`standard` (an OMG standard-library IRI; recorded, never installed). `usage` lists the usages the
+package's own `.project.json` declares — resource and `versionConstraint` as written, so the
+constraint and the transport (an SSH address stays SSH) survive — and an offline run walks the
+closure from the lock alone. Two packages that would install under the same
+`<publisher>-<name>_<version>` with different contents are an error. New packages are staged and
+published into `lib/` only after every usage resolved and verified; a failing run leaves `lib/`
+and the lock as they were. A lock entry wins over the constraint in `.project.json` as long as it satisfies it;
 `install` then verifies the installed copy's digest and fetches only what is missing or changed.
 
 ## Install layout
@@ -123,3 +129,11 @@ listing `pkg:sysand/<publisher>/<name>` IRIs and, per project,
 `<publisher>/<name>/versions.json` (`version`, `usage`, `kpar_size`, `kpar_digest`, newest first)
 with `<version>/{.project.json,.meta.json,project.kpar}`. `pkg:sysand/<publisher>/<name>`
 resources resolve through the index named by `-index` or `$SYSPI_INDEX`.
+
+## Bundle reproducibility
+
+`syspi bundle` writes members sorted with fixed 1980-01-01 ZIP timestamps and regenerates
+`.meta.json`. Its `created` time is `SOURCE_DATE_EPOCH` when set, otherwise the commit time of the
+checked-out git or hg revision, otherwise the current time; so a bundle of an unchanged checkout
+is byte-identical across runs. The output file is never a member of itself when written inside
+the project.
