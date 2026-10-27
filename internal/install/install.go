@@ -116,7 +116,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if old == nil {
 		old = lock.New()
 	}
-	canonicalResources(old)
+	keyResources(old)
 	r := &resolver{ctx: ctx, opts: opts, proj: proj, old: old, fresh: lock.New(), chosen: map[string]*lock.Entry{}, res: &Result{}, libDir: filepath.Join(root, project.LibDir), slots: map[string]slot{}}
 	for _, u := range proj.Usage {
 		c, err := usageConstraint(u)
@@ -444,21 +444,20 @@ func (r *resolver) requeueLocked(e *lock.Entry, old *lock.Entry) error {
 	return nil
 }
 
-// canonicalResources rewrites each lock resource that still parses as a
-// repository to its canonical identity, so older spellings keep matching; a
-// .git suffix that an older lock kept only in source goes back into the path.
-func canonicalResources(l *lock.Lock) {
+// keyResources rewrites each lock resource to its matching key, so a lock
+// written in an older or differently suffixed spelling still matches its usage.
+func keyResources(l *lock.Lock) {
 	for i := range l.Packages {
-		e := &l.Packages[i]
-		o, err := origin.Parse(e.Resource)
-		if err != nil || o.Kind != origin.VCS {
-			continue
-		}
-		if o.VCS == "git" && strings.HasSuffix(e.Source, ".git") && !strings.HasSuffix(o.Path, ".git") {
-			o.Path += ".git"
-		}
-		e.Resource = o.Identity()
+		l.Packages[i].Resource = lockKey(l.Packages[i].Resource)
 	}
+}
+
+// lockKey is origin.Key for a repository resource and the resource itself otherwise.
+func lockKey(resource string) string {
+	if o, err := origin.Parse(resource); err == nil && o.Kind == origin.VCS {
+		return o.Key()
+	}
+	return resource
 }
 
 func (r *resolver) download(url string, dst string) error {
@@ -549,7 +548,7 @@ func installedTreeMatches(dir string, old *lock.Entry) bool {
 
 func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error) {
 	id := o.Identity()
-	old := r.locked(id, req.constraint)
+	old := r.locked(o.Key(), req.constraint)
 	if old != nil && !r.opts.LockOnly {
 		stem := (&project.Project{Name: old.Name, Publisher: old.Publisher, Version: old.Version}).InstallName()
 		dst := filepath.Join(r.libDir, stem)
@@ -558,14 +557,14 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 				return nil, err
 			}
 			e := *old
-			e.Usage = nil
+			e.Resource, e.Usage = id, nil
 			r.res.Reused = append(r.res.Reused, id)
 			return &e, r.requeueLocked(&e, old)
 		}
 	}
 	if old != nil && r.opts.LockOnly {
 		e := *old
-		e.Usage = nil
+		e.Resource, e.Usage = id, nil
 		return &e, r.requeueLocked(&e, old)
 	}
 	if r.opts.Offline {

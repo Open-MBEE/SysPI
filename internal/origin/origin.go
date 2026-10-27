@@ -127,6 +127,17 @@ func (o *Origin) Identity() string {
 	return "pkg:generic/" + Encode(o.Name) + "?vcs_url=" + Encode(o.VCSURL(false))
 }
 
+// Key is the identity with a .git suffix dropped from the repository path:
+// what a lock entry and a usage are matched by, however the suffix was spelled.
+func (o *Origin) Key() string {
+	if o.Kind != VCS || !strings.HasSuffix(o.Path, ".git") {
+		return o.Identity()
+	}
+	k := *o
+	k.Path = strings.TrimSuffix(k.Path, ".git")
+	return k.Identity()
+}
+
 // Canonical is the identity with the exact version inside vcs_url when one
 // was named.
 func (o *Origin) Canonical() string {

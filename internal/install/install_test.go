@@ -250,23 +250,65 @@ func TestGitInstallLockAndOffline(t *testing.T) {
 	runErr(t, dir, Options{}, "usage")
 }
 
-func TestCanonicalResources(t *testing.T) {
+func TestKeyResources(t *testing.T) {
 	l := lock.New()
 	l.Put(lock.Entry{Resource: "pkg:git/example.org/team/widgets", Kind: lock.KindVCS})
-	l.Put(lock.Entry{Resource: "git+ssh://example.org/team/gears#packages/gears", Kind: lock.KindVCS})
+	l.Put(lock.Entry{Resource: "git+ssh://example.org/team/gears.git#packages/gears", Kind: lock.KindVCS})
 	l.Put(lock.Entry{Resource: "https://example.org/dist/tools_1.0.0.kpar", Kind: lock.KindArchive})
-	// An older lock dropped .git from the identity but kept it in source.
-	l.Put(lock.Entry{Resource: "pkg:generic/rover?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Frover", Kind: lock.KindVCS, VCS: "git", Source: "https://example.org/team/rover.git"})
-	canonicalResources(l)
+	l.Put(lock.Entry{Resource: "pkg:generic/rover?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Frover.git", Kind: lock.KindVCS})
+	keyResources(l)
 	want := []string{
 		"pkg:generic/widgets?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Fwidgets",
 		"pkg:generic/gears?vcs_url=git%2Bssh:%2F%2Fexample.org%2Fteam%2Fgears%23packages%2Fgears",
 		"https://example.org/dist/tools_1.0.0.kpar",
-		"pkg:generic/rover?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Frover.git",
+		"pkg:generic/rover?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Frover",
 	}
 	for i, w := range want {
 		if l.Packages[i].Resource != w {
 			t.Errorf("entry %d = %s, want %s", i, l.Packages[i].Resource, w)
+		}
+	}
+}
+
+// A lock written in any spelling of the repository, with or without .git,
+// matches a usage in any other spelling, and the installed tree is reused offline.
+func TestLockMatchesAcrossGitSuffixSpellings(t *testing.T) {
+	widgets, _ := fixture(t)
+	withGit := "git+file://" + filepath.ToSlash(widgets)
+	if !strings.HasSuffix(withGit, ".git") {
+		t.Fatalf("fixture %s is not a .git location", withGit)
+	}
+	without := strings.TrimSuffix(withGit, ".git")
+	spellings := []struct{ name, res string }{
+		{"bare .git", withGit},
+		{"bare", without},
+		{"canonical .git", ident(t, withGit)},
+		{"canonical", ident(t, without)},
+	}
+	usage := func(res string) project.Usage { return project.Usage{Resource: res, VersionConstraint: "1.0.0"} }
+	dir := consumer(t, usage(withGit))
+	if res, log := run(t, dir, Options{}); len(res.Installed) != 1 {
+		t.Fatalf("install %+v\n%s", res, log)
+	}
+	first, _ := os.ReadFile(filepath.Join(dir, project.LockFile))
+	for _, lk := range spellings {
+		for _, us := range spellings {
+			p := &project.Project{Name: "app", Publisher: "test", Version: "0.1.0", Usage: []project.Usage{usage(us.res)}}
+			if err := p.Write(dir); err != nil {
+				t.Fatal(err)
+			}
+			write(t, dir, project.LockFile, strings.ReplaceAll(string(first), `"`+ident(t, withGit)+`"`, `"`+lk.res+`"`))
+			res, log := run(t, dir, Options{Offline: true})
+			if len(res.Reused) != 1 || len(res.Installed) != 0 {
+				t.Fatalf("lock %s, usage %s: %+v\n%s", lk.name, us.name, res, log)
+			}
+			got, ok, err := lock.Read(dir, project.LockFile)
+			if err != nil || !ok {
+				t.Fatalf("lock after offline run: ok=%v err=%v", ok, err)
+			}
+			if e := got.Find(ident(t, us.res)); e == nil || e.Revision == "" || e.SHA256 == "" {
+				t.Fatalf("lock %s, usage %s: written lock lacks the usage identity %s:\n%s", lk.name, us.name, ident(t, us.res), got.Marshal())
+			}
 		}
 	}
 }

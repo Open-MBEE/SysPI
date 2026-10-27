@@ -107,3 +107,27 @@ func TestEncode(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestKey(t *testing.T) {
+	want := "pkg:generic/repo?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Frepo"
+	for _, res := range []string{
+		"pkg:git/example.org/team/repo.git",
+		"pkg:git/example.org/team/repo",
+		"git+https://example.org/team/repo.git@1.0.0",
+		"git+https://example.org/team/repo",
+		want,
+		"pkg:generic/repo?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Frepo.git",
+	} {
+		o, err := Parse(res)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if o.Key() != want {
+			t.Errorf("%s: key %s, want %s", res, o.Key(), want)
+		}
+	}
+	o, _ := Parse("https://example.org/x.kpar")
+	if o.Key() != o.Identity() {
+		t.Errorf("archive key %s != identity %s", o.Key(), o.Identity())
+	}
+}
