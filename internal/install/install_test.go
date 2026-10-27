@@ -296,6 +296,18 @@ func TestLockMatchesAcrossGitSuffixSpellings(t *testing.T) {
 		t.Fatalf("install %+v\n%s", res, log)
 	}
 	first, _ := os.ReadFile(filepath.Join(dir, project.LockFile))
+	// An older lock recorded the source in its input spelling; it is still the same location.
+	oldSrc := strings.ReplaceAll(string(first), `"source": "`+strings.ReplaceAll(filepath.FromSlash(widgets), `\\`, `\\\\`)+`"`, `"source": "git+file://`+filepath.ToSlash(widgets)+`"`)
+	if oldSrc == string(first) {
+		t.Fatalf("lock did not contain the widgets source:\n%s", first)
+	}
+	write(t, dir, project.LockFile, oldSrc)
+	if res, log := run(t, dir, Options{Offline: true}); len(res.Reused) != 1 {
+		t.Fatalf("older source spelling %+v\n%s", res, log)
+	}
+	if again, _ := os.ReadFile(filepath.Join(dir, project.LockFile)); !bytes.Equal(again, first) {
+		t.Fatalf("older source not rewritten:\n%s", again)
+	}
 	for _, lk := range spellings {
 		for _, us := range spellings {
 			p := &project.Project{Name: "app", Publisher: "test", Version: "0.1.0", Usage: []project.Usage{usage(us.res)}}
@@ -318,6 +330,30 @@ func TestLockMatchesAcrossGitSuffixSpellings(t *testing.T) {
 			if e := got.Find(ident(t, us.res)); e == nil || e.Revision == "" || e.SHA256 == "" {
 				t.Fatalf("lock %s, usage %s: written lock lacks the usage identity %s:\n%s", lk.name, us.name, ident(t, us.res), got.Marshal())
 			}
+		}
+	}
+}
+
+func TestLocationKey(t *testing.T) {
+	same := [][2]string{
+		{"git+ssh://Example.org/team/repo.git", "ssh://example.org/team/repo.git"},
+		{"git+https://example.org/team/repo", "https://example.org/team/repo"},
+		{"git+file:///srv/repo.git", filepath.FromSlash("/srv/repo.git")},
+		{"svn+file:///srv/repo", "file:///srv/repo"},
+	}
+	for _, c := range same {
+		if locationKey(c[0]) != locationKey(c[1]) {
+			t.Errorf("%s and %s should be one location", c[0], c[1])
+		}
+	}
+	differ := [][2]string{
+		{"https://example.org/team/repo", "https://example.org/team/repo.git"},
+		{"ssh://example.org/team/repo", "https://example.org/team/repo"},
+		{"https://example.org/Team/repo", "https://example.org/team/repo"},
+	}
+	for _, c := range differ {
+		if locationKey(c[0]) == locationKey(c[1]) {
+			t.Errorf("%s and %s should be two locations", c[0], c[1])
 		}
 	}
 }

@@ -410,10 +410,28 @@ func (r *resolver) locked(id string, c version.Constraint) *lock.Entry {
 // whose recorded source is the requested location: repo and repo.git differ.
 func (r *resolver) lockedRepository(o *origin.Origin, c version.Constraint) *lock.Entry {
 	old := r.locked(o.Key(), c)
-	if old != nil && old.Source != "" && old.Source != o.Source {
+	if old != nil && old.Source != "" && locationKey(old.Source) != locationKey(o.Source) {
 		return nil
 	}
 	return old
+}
+
+// locationKey normalises a repository source for comparison: a <vcs>+ scheme
+// prefix and host case do not matter, a file URL is its path; .git does.
+func locationKey(src string) string {
+	scheme, rest, ok := strings.Cut(src, "://")
+	if !ok {
+		return src
+	}
+	if _, t, ok := strings.Cut(scheme, "+"); ok {
+		scheme = t
+	}
+	scheme = strings.ToLower(scheme)
+	if scheme == "file" {
+		return filepath.FromSlash(rest)
+	}
+	host, p, _ := strings.Cut(rest, "/")
+	return scheme + "://" + strings.ToLower(host) + "/" + p
 }
 
 // reuseLocked keeps a locked archive entry when only the lock is being
@@ -567,14 +585,14 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 				return nil, err
 			}
 			e := *old
-			e.Resource, e.Usage = id, nil
+			e.Resource, e.Source, e.Usage = id, o.Source, nil
 			r.res.Reused = append(r.res.Reused, id)
 			return &e, r.requeueLocked(&e, old)
 		}
 	}
 	if old != nil && r.opts.LockOnly {
 		e := *old
-		e.Resource, e.Usage = id, nil
+		e.Resource, e.Source, e.Usage = id, o.Source, nil
 		return &e, r.requeueLocked(&e, old)
 	}
 	if r.opts.Offline {
