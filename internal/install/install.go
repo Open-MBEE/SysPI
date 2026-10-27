@@ -406,6 +406,16 @@ func (r *resolver) locked(id string, c version.Constraint) *lock.Entry {
 	return old
 }
 
+// lockedRepository is locked by the repository key, but only for an entry
+// whose recorded source is the requested location: repo and repo.git differ.
+func (r *resolver) lockedRepository(o *origin.Origin, c version.Constraint) *lock.Entry {
+	old := r.locked(o.Key(), c)
+	if old != nil && old.Source != "" && old.Source != o.Source {
+		return nil
+	}
+	return old
+}
+
 // reuseLocked keeps a locked archive entry when only the lock is being
 // written, or when lib/ already holds the archive with the locked digest.
 func (r *resolver) reuseLocked(old *lock.Entry) (*lock.Entry, bool, error) {
@@ -548,7 +558,7 @@ func installedTreeMatches(dir string, old *lock.Entry) bool {
 
 func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error) {
 	id := o.Identity()
-	old := r.locked(o.Key(), req.constraint)
+	old := r.lockedRepository(o, req.constraint)
 	if old != nil && !r.opts.LockOnly {
 		stem := (&project.Project{Name: old.Name, Publisher: old.Publisher, Version: old.Version}).InstallName()
 		dst := filepath.Join(r.libDir, stem)

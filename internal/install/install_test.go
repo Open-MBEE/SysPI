@@ -271,7 +271,9 @@ func TestKeyResources(t *testing.T) {
 }
 
 // A lock written in any spelling of the repository, with or without .git,
-// matches a usage in any other spelling, and the installed tree is reused offline.
+// matches a usage in any spelling of the same location, and the installed
+// tree is reused offline; a usage naming the other location (repo for
+// repo.git) is a different repository and is not served from that tree.
 func TestLockMatchesAcrossGitSuffixSpellings(t *testing.T) {
 	widgets, _ := fixture(t)
 	withGit := "git+file://" + filepath.ToSlash(widgets)
@@ -279,11 +281,14 @@ func TestLockMatchesAcrossGitSuffixSpellings(t *testing.T) {
 		t.Fatalf("fixture %s is not a .git location", withGit)
 	}
 	without := strings.TrimSuffix(withGit, ".git")
-	spellings := []struct{ name, res string }{
-		{"bare .git", withGit},
-		{"bare", without},
-		{"canonical .git", ident(t, withGit)},
-		{"canonical", ident(t, without)},
+	spellings := []struct {
+		name, res string
+		same      bool // names the installed location rather than its .git-less sibling
+	}{
+		{"bare .git", withGit, true},
+		{"bare", without, false},
+		{"canonical .git", ident(t, withGit), true},
+		{"canonical", ident(t, without), false},
 	}
 	usage := func(res string) project.Usage { return project.Usage{Resource: res, VersionConstraint: "1.0.0"} }
 	dir := consumer(t, usage(withGit))
@@ -298,6 +303,10 @@ func TestLockMatchesAcrossGitSuffixSpellings(t *testing.T) {
 				t.Fatal(err)
 			}
 			write(t, dir, project.LockFile, strings.ReplaceAll(string(first), `"`+ident(t, withGit)+`"`, `"`+lk.res+`"`))
+			if !us.same {
+				runErr(t, dir, Options{Offline: true}, "offline and "+ident(t, us.res)+" is not installed")
+				continue
+			}
 			res, log := run(t, dir, Options{Offline: true})
 			if len(res.Reused) != 1 || len(res.Installed) != 0 {
 				t.Fatalf("lock %s, usage %s: %+v\n%s", lk.name, us.name, res, log)
