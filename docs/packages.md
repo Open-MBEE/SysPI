@@ -13,9 +13,9 @@ transport  = git: "git" | "https" | "http" | "ssh"      (Annex B.3.5; "git" and 
              hg:  "http" | "https" | "static-http" | "ssh"
              svn: "svn" | "http" | "https" | "ssh"      ("svn" and "svn+svn" are one)
              any: "file"   (a repository on this machine, pip's notation; host empty, path absolute)
-name       = last segment of path, ".git" stripped
+name       = last segment of path, a ".git" suffix stripped
 host       = DNS name (lower-cased), with an optional port
-path       = repository path on the host, without a leading "/" and without ".git"
+path       = repository path on the host as written (a ".git" suffix stays), without a leading "/"
 version    = semantic version (MAJOR.MINOR.PATCH[-pre][+build]) naming a tag; an exact constraint
 subpath    = directory within the tagged tree that is the project directory
 ```
@@ -35,7 +35,8 @@ bare vcs_url notation `git+https://…`, `git+ssh://…`, `git://…`, `hg+https
 `hg+static-http://…`, `svn://…`, `svn+https://…`, `svn+ssh://…`, `<vcs>+file:///…`, each with an
 optional `@<version>` and `#<subpath>`. The version-free identity (`vcs_url` without `@<version>`)
 is what the lock records as `resource`; what the VCS executable is given is kept as `source`
-(`git+ssh` stays SSH).
+(`git+ssh` stays SSH; the path is cloned exactly as written, so `…/repo` and `…/repo.git` are
+two locations and the one your server serves is the one to write).
 
 Refused, each with a message naming the three accepted spellings: `pkg:svn/…` and `pkg:hg/…`
 (not Package-URL types), `pkg:github/…`, `pkg:gitlab/…` and other provider vocabularies (the
@@ -43,7 +44,8 @@ host is part of the location), plain clone URLs as identities (`https://host/pat
 `ssh://…`, `git@host:path`, `file:///path@1.0.0`, `/path@1.0.0`), a user name or password in the
 host (Annex B.3.5), a transport outside the lists above, `bzr` or any other VCS, a commit id or
 `@latest` as version. A plain `http(s)` IRI is only ever dereferenced as a project interchange
-file — a `.kpar` — as KerML 1.1 §10.3 Table 12 describes `resource`; it is never cloned.
+file — a `.kpar` — as KerML 1.1 §10.3 Table 12 describes `resource`; it is never cloned, and
+`user:password@` in it is refused (credentials belong in the netrc, never in `.project.json`).
 
 ## What a package is
 
@@ -159,7 +161,8 @@ runs as before and the hint points at the cache or `svn+ssh://`. Debian and Ubun
 without plaintext password storage, so on CI boxes and containers the netrc is the way. Its own
 HTTP downloads (`.kpar` URLs) take HTTP Basic from the netrc file (`$NETRC`, else `~/.netrc` /
 `%USERPROFILE%\_netrc`), matched by host and sent only to that host; a redirect elsewhere gets
-that host's entry or none.
+that host's own `machine` entry or none — the `default` entry never follows a redirect. URLs in
+diagnostics are shown without user info or query.
 
 Proxies come from the environment through `http.DefaultTransport`.
 

@@ -81,14 +81,14 @@ type Origin struct {
 	VCS, Transport string
 	// Host is the repository host (empty for a repository on this machine).
 	Host string
-	// Path is the repository path on the host, without leading slash or .git
-	// suffix; for a repository on this machine it is the absolute path.
+	// Path is the repository path on the host as written, without a leading
+	// slash; for a repository on this machine it is the absolute path.
 	Path string
 	// Subpath is the project directory within the repository, "" for the root.
 	Subpath string
 	// Version is the exact version named in the resource, "" when none.
 	Version string
-	// Name is the purl name: the last segment of Path.
+	// Name is the purl name: the last segment of Path without a .git suffix.
 	Name string
 	// Source is what the VCS executable is given, or the archive path/URL, or
 	// the directory for LocalDir, or the IRI for Standard.
@@ -316,14 +316,14 @@ func parseVCSURL(res, raw string) (*Origin, error) {
 	if u.Host == "" {
 		return nil, fmt.Errorf("resource %q: repository URL has no host", res)
 	}
-	p := strings.TrimSuffix(strings.Trim(u.Path, "/"), ".git")
+	p := strings.Trim(u.Path, "/")
 	if p == "" {
 		return nil, fmt.Errorf("resource %q: repository URL has no path", res)
 	}
 	if strings.Contains(p, "..") {
 		return nil, fmt.Errorf("resource %q: repository path must not contain \"..\"", res)
 	}
-	o.Host, o.Path, o.Name = strings.ToLower(u.Host), p, path.Base(p)
+	o.Host, o.Path, o.Name = strings.ToLower(u.Host), p, strings.TrimSuffix(path.Base(p), ".git")
 	o.Source = source(vcs, transport, o.Host, p)
 	return o, nil
 }
@@ -341,13 +341,6 @@ func allowed(vcs string) string {
 // source is the address the VCS executable is given for a vcs_url.
 func source(vcs, transport, host, p string) string {
 	switch vcs {
-	case "git":
-		switch transport {
-		case "https", "http":
-			return transport + "://" + host + "/" + p + ".git"
-		default: // git, ssh
-			return transport + "://" + host + "/" + p
-		}
 	case "svn":
 		if transport == "ssh" {
 			return "svn+ssh://" + host + "/" + p
@@ -366,6 +359,9 @@ func parseHTTP(res string) (*Origin, error) {
 	u, err := url.Parse(spec)
 	if err != nil || u.Host == "" {
 		return nil, fmt.Errorf("resource %q: not a valid URL", res)
+	}
+	if u.User != nil {
+		return nil, fmt.Errorf("resource %q: credentials in an http(s) IRI are not supported; add a netrc entry for %s instead and keep the IRI bare", res, u.Hostname())
 	}
 	if !strings.HasSuffix(strings.ToLower(u.Path), ".kpar") {
 		return nil, fmt.Errorf("resource %q: an http(s) IRI is only dereferenced as a project interchange file (.kpar); a repository is written as %s", res, Spellings)

@@ -106,7 +106,7 @@ configuration, and credentials never enter `.project.json`, the lock or a log (U
   credentials apply (`svn ls <url>` once interactively), or use `svn+ssh://`.
 - **HTTP** (`.kpar` URLs) — HTTP Basic from your netrc: `$NETRC` if set, else `~/.netrc`
   (`%USERPROFILE%\_netrc` on Windows), matched by host and never sent to another host on a
-  redirect. Proxy settings come from the environment (`HTTPS_PROXY`, `NO_PROXY`).
+  redirect (a redirect target gets only its own `machine` entry, never `default`). Proxy settings come from the environment (`HTTPS_PROXY`, `NO_PROXY`).
 
 An authentication failure is reported with one hint naming the fix for that backend.
 

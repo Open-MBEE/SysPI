@@ -116,6 +116,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if old == nil {
 		old = lock.New()
 	}
+	canonicalResources(old)
 	r := &resolver{ctx: ctx, opts: opts, proj: proj, old: old, fresh: lock.New(), chosen: map[string]*lock.Entry{}, res: &Result{}, libDir: filepath.Join(root, project.LibDir), slots: map[string]slot{}}
 	for _, u := range proj.Usage {
 		c, err := usageConstraint(u)
@@ -443,9 +444,20 @@ func (r *resolver) requeueLocked(e *lock.Entry, old *lock.Entry) error {
 	return nil
 }
 
+// canonicalResources rewrites each lock resource that still parses as a
+// repository to its canonical identity, so older spellings keep matching.
+func canonicalResources(l *lock.Lock) {
+	for i := range l.Packages {
+		if o, err := origin.Parse(l.Packages[i].Resource); err == nil && o.Kind == origin.VCS {
+			l.Packages[i].Resource = o.Identity()
+		}
+	}
+}
+
 func (r *resolver) download(url string, dst string) error {
+	shown := netrc.RedactURL(url)
 	if r.opts.Offline {
-		return fmt.Errorf("offline: %s is not installed and would have to be downloaded", url)
+		return fmt.Errorf("offline: %s is not installed and would have to be downloaded", shown)
 	}
 	req, err := http.NewRequestWithContext(r.ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -461,7 +473,7 @@ func (r *resolver) download(url string, dst string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s: HTTP %s%s", url, resp.Status, netrc.Hint(resp.StatusCode, req.URL.Hostname()))
+		return fmt.Errorf("%s: HTTP %s%s", shown, resp.Status, netrc.Hint(resp.StatusCode, req.URL.Hostname()))
 	}
 	f, err := os.Create(dst)
 	if err != nil {
@@ -473,7 +485,7 @@ func (r *resolver) download(url string, dst string) error {
 		return err
 	}
 	if n > project.MaxArchiveSize {
-		return fmt.Errorf("%s: larger than the %d byte limit", url, project.MaxArchiveSize)
+		return fmt.Errorf("%s: larger than the %d byte limit", shown, project.MaxArchiveSize)
 	}
 	return nil
 }

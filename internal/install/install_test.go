@@ -219,6 +219,21 @@ func TestGitInstallLockAndOffline(t *testing.T) {
 		t.Fatalf("re-resolved lock differs:\n%s\n%s", first, third)
 	}
 
+	// A lock whose resources carry an older, non-canonical spelling still
+	// matches the installed trees offline.
+	legacy := strings.ReplaceAll(string(first), `"`+ident(t, wres)+`"`, `"`+wres+`"`)
+	if legacy == string(first) {
+		t.Fatal("lock did not contain the canonical widgets identity")
+	}
+	write(t, dir, project.LockFile, legacy)
+	res5, log5 := run(t, dir, Options{Offline: true})
+	if len(res5.Reused) != 2 || !res5.LockWritten {
+		t.Fatalf("legacy lock run %+v\n%s", res5, log5)
+	}
+	if again, _ := os.ReadFile(filepath.Join(dir, project.LockFile)); !bytes.Equal(again, first) {
+		t.Fatalf("legacy lock not rewritten canonically:\n%s", again)
+	}
+
 	// Offline with the repository gone: still satisfied.
 	os.RemoveAll(widgets)
 	res4, _ := run(t, dir, Options{})
@@ -233,6 +248,24 @@ func TestGitInstallLockAndOffline(t *testing.T) {
 	// A tampered installed tree is reinstalled from the lock... which needs the repository.
 	write(t, dir, "lib/acme-widgets_1.0.0/Widgets.sysml", "tampered")
 	runErr(t, dir, Options{}, "usage")
+}
+
+func TestCanonicalResources(t *testing.T) {
+	l := lock.New()
+	l.Put(lock.Entry{Resource: "pkg:git/example.org/team/widgets", Kind: lock.KindVCS})
+	l.Put(lock.Entry{Resource: "git+ssh://example.org/team/gears#packages/gears", Kind: lock.KindVCS})
+	l.Put(lock.Entry{Resource: "https://example.org/dist/tools_1.0.0.kpar", Kind: lock.KindArchive})
+	canonicalResources(l)
+	want := []string{
+		"pkg:generic/widgets?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Fwidgets",
+		"pkg:generic/gears?vcs_url=git%2Bssh:%2F%2Fexample.org%2Fteam%2Fgears%23packages%2Fgears",
+		"https://example.org/dist/tools_1.0.0.kpar",
+	}
+	for i, w := range want {
+		if l.Packages[i].Resource != w {
+			t.Errorf("entry %d = %s, want %s", i, l.Packages[i].Resource, w)
+		}
+	}
 }
 
 func TestRefusals(t *testing.T) {

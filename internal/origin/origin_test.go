@@ -12,12 +12,13 @@ const ext = "pkg:generic/OpenSysML-Extensions-Library?vcs_url=git%2Bhttps:%2F%2F
 // Every accepted spelling normalises to one canonical purl and round-trips.
 func TestCanonical(t *testing.T) {
 	for _, tc := range []struct{ in, canonical, source string }{
-		{ext + "%401.0.0", ext + "%401.0.0", "https://github.com/Open-MBEE/OpenSysML-Extensions-Library.git"},
-		{"pkg:generic/OpenSysML-Extensions-Library?vcs_url=git%2Bhttps%3A%2F%2Fgithub.com%2FOpen-MBEE%2FOpenSysML-Extensions-Library%401.0.0", ext + "%401.0.0", "https://github.com/Open-MBEE/OpenSysML-Extensions-Library.git"},
-		{"pkg:git/github.com/Open-MBEE/OpenSysML-Extensions-Library@1.0.0", ext + "%401.0.0", "https://github.com/Open-MBEE/OpenSysML-Extensions-Library.git"},
-		{"pkg:git/github.com/Open-MBEE/OpenSysML-Extensions-Library.git", ext, "https://github.com/Open-MBEE/OpenSysML-Extensions-Library.git"},
-		{"git+https://github.com/Open-MBEE/OpenSysML-Extensions-Library.git@1.0.0", ext + "%401.0.0", "https://github.com/Open-MBEE/OpenSysML-Extensions-Library.git"},
-		{"pkg:generic/OpenSysML-Extensions-Library@1.0.0?vcs_url=git%2Bhttps:%2F%2Fgithub.com%2FOpen-MBEE%2FOpenSysML-Extensions-Library", ext + "%401.0.0", "https://github.com/Open-MBEE/OpenSysML-Extensions-Library.git"},
+		{ext + "%401.0.0", ext + "%401.0.0", "https://github.com/Open-MBEE/OpenSysML-Extensions-Library"},
+		{"pkg:generic/OpenSysML-Extensions-Library?vcs_url=git%2Bhttps%3A%2F%2Fgithub.com%2FOpen-MBEE%2FOpenSysML-Extensions-Library%401.0.0", ext + "%401.0.0", "https://github.com/Open-MBEE/OpenSysML-Extensions-Library"},
+		{"pkg:git/github.com/Open-MBEE/OpenSysML-Extensions-Library@1.0.0", ext + "%401.0.0", "https://github.com/Open-MBEE/OpenSysML-Extensions-Library"},
+		{"pkg:generic/OpenSysML-Extensions-Library@1.0.0?vcs_url=git%2Bhttps:%2F%2Fgithub.com%2FOpen-MBEE%2FOpenSysML-Extensions-Library", ext + "%401.0.0", "https://github.com/Open-MBEE/OpenSysML-Extensions-Library"},
+		// A .git suffix is part of the location and is cloned as written; only <name> drops it.
+		{"pkg:git/github.com/Open-MBEE/OpenSysML-Extensions-Library.git", ext + ".git", "https://github.com/Open-MBEE/OpenSysML-Extensions-Library.git"},
+		{"git+https://github.com/Open-MBEE/OpenSysML-Extensions-Library.git@1.0.0", ext + ".git%401.0.0", "https://github.com/Open-MBEE/OpenSysML-Extensions-Library.git"},
 		{"git+ssh://git.example.org/team/repo@1.2.0#packages/core", "pkg:generic/repo?vcs_url=git%2Bssh:%2F%2Fgit.example.org%2Fteam%2Frepo%401.2.0%23packages%2Fcore", "ssh://git.example.org/team/repo"},
 		{"git://git.example.org/team/repo", "pkg:generic/repo?vcs_url=git%2Bgit:%2F%2Fgit.example.org%2Fteam%2Frepo", "git://git.example.org/team/repo"},
 		{"hg+https://hg.example.org/repo@2.0.0", "pkg:generic/repo?vcs_url=hg%2Bhttps:%2F%2Fhg.example.org%2Frepo%402.0.0", "https://hg.example.org/repo"},
@@ -91,6 +92,7 @@ func TestRefused(t *testing.T) {
 		{"pkg:git/codeberg.org/forgejo/forgejo@a72d2c07cfca03b55371089de6aa230d8c951fa0#options", "looks like a commit id"},
 		{"git+https://github.com/acme/widgets@latest", "\"latest\" after @ is not a semantic version"},
 		{"https://example.org/x.kpar#sub", "a .kpar cannot have a #<subpath>"},
+		{"https://user:pw@example.org/x.kpar", "credentials in an http(s) IRI are not supported; add a netrc entry for example.org"},
 		{"pkg:generic/widgets?vcs_url=git%2Bhttps:%2F%2Fgithub.com%2Facme%2F..%2Fwidgets", "must not contain \"..\""},
 	} {
 		_, err := Parse(tc.in)
