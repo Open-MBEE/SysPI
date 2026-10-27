@@ -16,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 var (
@@ -67,20 +66,10 @@ func sh(t *testing.T, dir string, name string, args ...string) string {
 	return out
 }
 
-// emptyIndex stands in for sysand's default index so no test reaches
-// https://sysand.com; a test that wants another default overrides it.
-var emptyIndex = sync.OnceValue(func() string {
-	dir, err := os.MkdirTemp("", "syspi-empty-index-*")
-	if err != nil {
-		panic(err)
-	}
-	return dir
-})
-
 func shErr(dir string, env []string, name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	cmd.Env = append(append(append(os.Environ(), gitEnv...), "SYSAND_DEFAULT_INDEX="+emptyIndex()), env...)
+	cmd.Env = append(append(os.Environ(), gitEnv...), env...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -418,41 +407,4 @@ func TestRefusals(t *testing.T) {
 	if err == nil || !strings.Contains(out, `"git" is required`) || strings.Contains(out, "panic") {
 		t.Fatalf("missing git: %v\n%s", err, out)
 	}
-}
-
-func TestIndexEmitAndResolve(t *testing.T) {
-	bin := syspiBinary(t)
-	root := t.TempDir()
-	pkg := filepath.Join(root, "tools")
-	write(t, pkg, ".project.json", "{\n  \"name\": \"tools\",\n  \"publisher\": \"acme\",\n  \"version\": \"3.0.0\"\n}\n")
-	write(t, pkg, "Tools.sysml", "package Tools;\n")
-	idx := filepath.Join(root, "index")
-	sh(t, root, bin, "index", "emit", "-o", idx, pkg)
-	for _, want := range []string{"index.json", "acme/tools/versions.json", "acme/tools/3.0.0/project.kpar", "acme/tools/3.0.0/.project.json", "acme/tools/3.0.0/.meta.json"} {
-		if _, err := os.Stat(filepath.Join(idx, filepath.FromSlash(want))); err != nil {
-			t.Errorf("%s: %v", want, err)
-		}
-	}
-	vj, _ := os.ReadFile(filepath.Join(idx, "acme", "tools", "versions.json"))
-	for _, want := range []string{`"version": "3.0.0"`, `"kpar_size"`, `"kpar_digest": "sha256:`, `"usage": []`} {
-		if !strings.Contains(string(vj), want) {
-			t.Errorf("versions.json lacks %s:\n%s", want, vj)
-		}
-	}
-	srv := httptest.NewServer(http.FileServer(http.Dir(idx)))
-	defer srv.Close()
-	app := filepath.Join(root, "app")
-	os.MkdirAll(app, 0o755)
-	sh(t, app, bin, "init", "-name", "app")
-	sh(t, app, bin, "add", "-index", srv.URL, "pkg:sysand/acme/tools", "^3.0.0")
-	if _, err := os.Stat(filepath.Join(app, "lib", "acme-tools_3.0.0.kpar")); err != nil {
-		t.Fatal(err)
-	}
-	lk, _ := os.ReadFile(filepath.Join(app, ".project.lock.json"))
-	if lockField(t, string(lk), "pkg:sysand/acme/tools", "version") != "3.0.0" {
-		t.Fatalf("lock:\n%s", lk)
-	}
-	srv.Close()
-	sh(t, app, bin, "install", "-offline")
-	_ = time.Second
 }

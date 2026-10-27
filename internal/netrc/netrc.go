@@ -8,6 +8,7 @@ package netrc
 
 import (
 	"bufio"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -163,4 +164,13 @@ func Client() (*http.Client, error) {
 		return nil, err
 	}
 	return &http.Client{Transport: &Transport{File: f}}, nil
+}
+
+// Hint is the actionable line for an HTTP 401 or 403: a netrc entry for
+// the host.
+func Hint(status int, host string) string {
+	if status != http.StatusUnauthorized && status != http.StatusForbidden {
+		return ""
+	}
+	return fmt.Sprintf("\n  hint: the server wants credentials; add `machine %s login <user> password <secret>` to your netrc ($NETRC, else ~/.netrc, %%USERPROFILE%%\\_netrc on Windows)", host)
 }

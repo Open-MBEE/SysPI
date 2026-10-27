@@ -29,8 +29,6 @@ const (
 	ArchiveExt = ".kpar"
 	// LibDir is where packages are installed, beside the consuming .project.json.
 	LibDir = "lib"
-	// SysandLibDir is sysand's install directory, read but never written.
-	SysandLibDir = ".sysand/lib"
 )
 
 // Usage is one entry of .project.json's usage list.

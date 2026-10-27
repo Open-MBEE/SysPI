@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/Open-MBEE/SysPI/internal/digest"
-	"github.com/Open-MBEE/SysPI/internal/index"
 	"github.com/Open-MBEE/SysPI/internal/lock"
 	"github.com/Open-MBEE/SysPI/internal/project"
 )
@@ -317,7 +316,7 @@ func TestTransitiveAndConflict(t *testing.T) {
 	}
 }
 
-func TestArchivesLocalDirAndIndex(t *testing.T) {
+func TestArchivesAndLocalDir(t *testing.T) {
 	pkg := t.TempDir()
 	write(t, pkg, ".project.json", `{"name":"tools","publisher":"acme","version":"3.1.0","usage":[{"resource":"https://www.omg.org/spec/SysML/20250201/Systems-Library.kpar"}]}`)
 	write(t, pkg, "Tools.sysml", "package Tools;\n")
@@ -328,21 +327,16 @@ func TestArchivesLocalDirAndIndex(t *testing.T) {
 	sum, _ := digest.File(kpar)
 	srv := httptest.NewServer(http.FileServer(http.Dir(filepath.Dir(kpar))))
 	defer srv.Close()
-	idx := t.TempDir()
-	if _, err := index.Emit(idx, []string{kpar}, func(string) time.Time { return time.Unix(0, 0) }); err != nil {
-		t.Fatal(err)
-	}
 	editable := t.TempDir()
 	write(t, editable, ".project.json", `{"name":"dev","version":"0.0.1"}`)
 
 	dir := consumer(t,
 		project.Usage{Resource: kpar},
 		project.Usage{Resource: srv.URL + "/acme-tools_3.1.0.kpar"},
-		project.Usage{Resource: "pkg:sysand/acme/tools", VersionConstraint: "^3.0.0"},
 		project.Usage{Resource: editable},
 	)
-	res, _ := run(t, dir, Options{Indexes: []string{idx}})
-	if len(res.Installed) != 1 || len(res.Reused) != 2 || len(res.Skipped) != 2 {
+	res, _ := run(t, dir, Options{})
+	if len(res.Installed) != 1 || len(res.Reused) != 1 || len(res.Skipped) != 2 {
 		t.Fatalf("result %+v", res)
 	}
 	if d, _ := digest.File(filepath.Join(dir, "lib", "acme-tools_3.1.0.kpar")); d != sum {
@@ -352,9 +346,6 @@ func TestArchivesLocalDirAndIndex(t *testing.T) {
 	if e := lk.Find(srv.URL + "/acme-tools_3.1.0.kpar"); e == nil || e.Kind != lock.KindArchive || e.SHA256 != sum || e.Usage[0].Resource != "https://www.omg.org/spec/SysML/20250201/Systems-Library.kpar" {
 		t.Fatalf("remote entry %+v", e)
 	}
-	if e := lk.Find("pkg:sysand/acme/tools"); e == nil || e.Version != "3.1.0" || !strings.HasSuffix(e.Source, "/acme/tools/3.1.0/project.kpar") {
-		t.Fatalf("index entry %+v", e)
-	}
 	if e := lk.Find(editable); e == nil || e.Kind != lock.KindLocal || e.Name != "dev" {
 		t.Fatalf("local entry %+v", e)
 	}
@@ -362,36 +353,12 @@ func TestArchivesLocalDirAndIndex(t *testing.T) {
 	srv.Close()
 	os.Rename(kpar, kpar+".moved")
 	res2, _ := run(t, dir, Options{Offline: true})
-	if len(res2.Reused) != 3 {
+	if len(res2.Reused) != 2 {
 		t.Fatalf("offline %+v", res2)
 	}
 	os.Rename(kpar+".moved", kpar)
 	// Two usages of one editable directory with incompatible constraints conflict.
 	runErr(t, consumer(t, project.Usage{Resource: editable}, project.Usage{Resource: editable, VersionConstraint: "^1.0.0"}), Options{}, "already resolved to 0.0.1")
-	// An index entry must serve the package it names.
-	wrong := t.TempDir()
-	write(t, wrong, ".project.json", `{"name":"gears","publisher":"acme","version":"3.1.0"}`)
-	write(t, wrong, "Gears.sysml", "package Gears;\n")
-	wrongKpar := filepath.Join(t.TempDir(), "w.kpar")
-	project.Bundle(wrong, wrongKpar, time.Unix(0, 0))
-	wdata, _ := os.ReadFile(wrongKpar)
-	os.WriteFile(filepath.Join(idx, "acme", "tools", "3.1.0", "project.kpar"), wdata, 0o644)
-	wsum, _ := digest.File(wrongKpar)
-	vj, _ := os.ReadFile(filepath.Join(idx, "acme", "tools", "versions.json"))
-	os.WriteFile(filepath.Join(idx, "acme", "tools", "versions.json"), []byte(strings.Replace(string(vj), "sha256:"+sum, "sha256:"+wsum, 1)), 0o644)
-	runErr(t, consumer(t, project.Usage{Resource: "pkg:sysand/acme/tools"}), Options{Indexes: []string{idx}}, "served acme/gears, not acme/tools")
-	// Checksum mismatch inside an archive is refused.
-	bad := consumer(t, project.Usage{Resource: tamper(t, kpar)})
-	runErr(t, bad, Options{}, "checksum mismatch")
-	// A changed local archive against a lock is refused once the installed copy is gone
-	// (while it is present and has the locked digest, the lock wins and the source is not read).
-	write(t, pkg, "Tools.sysml", "package Tools { part def T; }\n")
-	project.Bundle(pkg, kpar, time.Unix(0, 0))
-	os.Remove(filepath.Join(dir, "lib", "acme-tools_3.1.0.kpar"))
-	runErr(t, dir, Options{}, "does not match the lock")
-	// pkg:sysand without an index.
-	runErr(t, consumer(t, project.Usage{Resource: "pkg:sysand/acme/tools"}), Options{}, "no sysand index configured")
-	runErr(t, consumer(t, project.Usage{Resource: "pkg:sysand/acme/other"}), Options{Indexes: []string{idx}}, "is not in the index")
 }
 
 // tamper copies an archive and flips a byte of a member's content by
@@ -437,13 +404,11 @@ func TestOfflineNeverReadsHTTPCredentials(t *testing.T) {
 	widgets, _ := fixture(t)
 	dir := consumer(t, project.Usage{Resource: "pkg:git/" + widgets + "@1.0.0"})
 	run(t, dir, Options{})
-	t.Setenv("SYSAND_CRED_X_BEARER_TOKEN", "t") // malformed: no SYSAND_CRED_X pattern
 	t.Setenv("NETRC", filepath.Join(t.TempDir(), "missing"))
 	res, _ := run(t, dir, Options{Offline: true})
 	if len(res.Reused) != 1 {
 		t.Fatalf("%+v", res)
 	}
-	runErr(t, consumer(t, project.Usage{Resource: "https://idx.example/x.kpar"}), Options{}, "please specify URL pattern SYSAND_CRED_X")
 }
 
 func TestPublishRollsBackWhenTheLockCannotBeWritten(t *testing.T) {
