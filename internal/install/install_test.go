@@ -255,11 +255,14 @@ func TestCanonicalResources(t *testing.T) {
 	l.Put(lock.Entry{Resource: "pkg:git/example.org/team/widgets", Kind: lock.KindVCS})
 	l.Put(lock.Entry{Resource: "git+ssh://example.org/team/gears#packages/gears", Kind: lock.KindVCS})
 	l.Put(lock.Entry{Resource: "https://example.org/dist/tools_1.0.0.kpar", Kind: lock.KindArchive})
+	// An older lock dropped .git from the identity but kept it in source.
+	l.Put(lock.Entry{Resource: "pkg:generic/rover?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Frover", Kind: lock.KindVCS, VCS: "git", Source: "https://example.org/team/rover.git"})
 	canonicalResources(l)
 	want := []string{
 		"pkg:generic/widgets?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Fwidgets",
 		"pkg:generic/gears?vcs_url=git%2Bssh:%2F%2Fexample.org%2Fteam%2Fgears%23packages%2Fgears",
 		"https://example.org/dist/tools_1.0.0.kpar",
+		"pkg:generic/rover?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Frover.git",
 	}
 	for i, w := range want {
 		if l.Packages[i].Resource != w {

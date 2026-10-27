@@ -445,12 +445,19 @@ func (r *resolver) requeueLocked(e *lock.Entry, old *lock.Entry) error {
 }
 
 // canonicalResources rewrites each lock resource that still parses as a
-// repository to its canonical identity, so older spellings keep matching.
+// repository to its canonical identity, so older spellings keep matching; a
+// .git suffix that an older lock kept only in source goes back into the path.
 func canonicalResources(l *lock.Lock) {
 	for i := range l.Packages {
-		if o, err := origin.Parse(l.Packages[i].Resource); err == nil && o.Kind == origin.VCS {
-			l.Packages[i].Resource = o.Identity()
+		e := &l.Packages[i]
+		o, err := origin.Parse(e.Resource)
+		if err != nil || o.Kind != origin.VCS {
+			continue
 		}
+		if o.VCS == "git" && strings.HasSuffix(e.Source, ".git") && !strings.HasSuffix(o.Path, ".git") {
+			o.Path += ".git"
+		}
+		e.Resource = o.Identity()
 	}
 }
 

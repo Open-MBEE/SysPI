@@ -157,16 +157,21 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return base.RoundTrip(req)
 }
 
-// credential picks the entry for a request; after a redirect to another
-// origin only an explicit machine entry counts, never the default entry.
+// credential picks the entry for a request; once a redirect chain has left
+// the first origin only an explicit machine entry counts, never the default.
 func (t *Transport) credential(req *http.Request) (Credential, bool) {
 	first := req
 	for first.Response != nil && first.Response.Request != nil {
 		first = first.Response.Request
 	}
-	if first != req && (first.URL.Scheme != req.URL.Scheme || first.URL.Host != req.URL.Host) {
-		c, ok := t.File.Machines[strings.ToLower(req.URL.Hostname())]
-		return c, ok
+	for hop := req; hop != nil; hop = hop.Response.Request {
+		if hop.URL.Scheme != first.URL.Scheme || hop.URL.Host != first.URL.Host {
+			c, ok := t.File.Machines[strings.ToLower(req.URL.Hostname())]
+			return c, ok
+		}
+		if hop.Response == nil {
+			break
+		}
 	}
 	return t.File.Lookup(req.URL.Hostname())
 }
