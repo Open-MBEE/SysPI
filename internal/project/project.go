@@ -38,7 +38,7 @@ type Usage struct {
 }
 
 // Project is an InterchangeProject. Publisher is not in Table 12; it is the
-// convention sysand and OpenSysML share for the install directory name.
+// convention OpenSysML reads for the install directory name.
 type Project struct {
 	Name        string   `json:"name"`
 	Publisher   string   `json:"publisher,omitempty"`

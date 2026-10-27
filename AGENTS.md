@@ -10,16 +10,16 @@ project from OpenSysML, which only reads what SysPI installs.
 
 1. **The package contract is KerML 1.1 §10.3 and nothing else.** `.project.json` at a tag is
    mandatory; never synthesise one, never add a lax mode.
-2. **Identities are version-control neutral.** `pkg:<vcs>/<host>/<path>[@<version>][#<subpath>]`
-   with `git`, `svn`, `hg`; no provider vocabulary, nothing host- or tool-specific in identities,
-   locks or installed trees. Everything VCS-specific lives behind `vcs.Source`.
+2. **Identities are ECMA-427 Package-URLs.** `pkg:generic/<name>?vcs_url=…` with the Annex B.3.5
+   `vcs_url` qualifier (`<vcs>+<transport>://<host>/<path>[@<version>][#<subpath>]`, percent-encoded);
+   `git`, `svn`, `hg`; no provider vocabulary, nothing host- or tool-specific in identities, locks
+   or installed trees. Everything VCS-specific lives behind `vcs.Source`.
 3. **Verify before reading.** Checksums, revisions, digests, path confinement and size bounds are
    checked before any model content is used or written under `lib/`.
 4. **Deterministic outputs.** The lock and `bundle` are byte-reproducible; sort, never rely on
    map order or wall-clock time (`SOURCE_DATE_EPOCH` is honoured).
 5. **Standard library only.** The CLI is `flag` with subcommand dispatch; the one third-party
    dependency is the semver range library. Do not add a CLI framework or a purl parser.
-6. **Never write `.sysand/lib/` or `sysand-lock.toml`.** They are read for interoperability only.
 
 ## Build, test, verify
 
@@ -46,7 +46,6 @@ internal/vcs/       Source interface; git, svn, hg implementations
 internal/digest/    the tree and file SHA-256 the lock records
 internal/project/   .project.json, .meta.json, .kpar reading, verification, bundling
 internal/lock/      .project.lock.json
-internal/index/     sysand static index: read and emit
 internal/install/   resolver: usages → lock entries → lib/
 tests/e2e/          end-to-end suite on local fixtures
 docs/               design and format notes
