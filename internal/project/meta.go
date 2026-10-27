@@ -151,7 +151,7 @@ func Members(dir string, skip ...string) ([]string, error) {
 		rel, _ := filepath.Rel(dir, p)
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
-			if p != dir && (d.Name() == ".git" || d.Name() == ".hg" || d.Name() == ".svn" || rel == LibDir || d.Name() == ".sysand") {
+			if p != dir && (d.Name() == ".git" || d.Name() == ".hg" || d.Name() == ".svn" || rel == LibDir) {
 				return filepath.SkipDir
 			}
 			return nil
