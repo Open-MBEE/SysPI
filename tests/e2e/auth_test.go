@@ -50,7 +50,7 @@ func TestAuthGitCredentialHelper(t *testing.T) {
 	srv := httptest.NewServer(basicAuth("alice", "s3cret", &seen, http.StripPrefix("/widgets.git/", http.FileServer(http.Dir(bare)))))
 	defer srv.Close()
 	// The plain clone URL keeps the http transport; its identity is pkg:git/<host:port>/widgets.git.
-	res := srv.URL + "/widgets.git@1.0.0"
+	res := "git+" + srv.URL + "/widgets.git@1.0.0"
 
 	// Without credentials: a clear hint, no prompt, no hang.
 	app := initApp(t, root, "app-nocred")
@@ -90,13 +90,13 @@ func TestAuthHgAuthSection(t *testing.T) {
 	hgrc := filepath.Join(root, "hgrc")
 	os.WriteFile(hgrc, []byte("[auth]\npkg.prefix = http://"+hostport+"/repo\npkg.username = alice\npkg.password = s3cret\n"), 0o600)
 	app := initApp(t, root, "app-hg-nocred")
-	out, err := shErr(app, []string{"HGRCPATH=" + filepath.Join(root, "empty-hgrc")}, bin, "add", "static-http://"+hostport+"/repo@1.0.0")
+	out, err := shErr(app, []string{"HGRCPATH=" + filepath.Join(root, "empty-hgrc")}, bin, "add", "hg+static-http://"+hostport+"/repo@1.0.0")
 	if err == nil || !strings.Contains(out, "hint: hg needs credentials") {
 		t.Fatalf("expected the hg auth hint: %v\n%s", err, out)
 	}
 	app2 := initApp(t, root, "app-hg-cred")
 	// HGPLAIN=1 is set by syspi itself; [auth] must still apply.
-	if out, err := shErr(app2, []string{"HGRCPATH=" + hgrc, "HGPLAIN=1"}, bin, "add", "static-http://"+hostport+"/repo@1.0.0"); err != nil {
+	if out, err := shErr(app2, []string{"HGRCPATH=" + hgrc, "HGPLAIN=1"}, bin, "add", "hg+static-http://"+hostport+"/repo@1.0.0"); err != nil {
 		t.Fatalf("add with [auth]: %v\n%s", err, out)
 	}
 	if _, err := os.Stat(filepath.Join(app2, "lib", "acme-widgets_1.0.0", "Widgets.sysml")); err != nil {

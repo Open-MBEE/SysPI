@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/Open-MBEE/SysPI/internal/origin"
 )
 
 var (
@@ -180,6 +182,9 @@ func treeFiles(t *testing.T, dir string) map[string]string {
 }
 
 func lockField(t *testing.T, lockJSON, resource, field string) string {
+	if o, err := origin.Parse(resource); err == nil {
+		resource = o.Identity()
+	}
 	t.Helper()
 	i := strings.Index(lockJSON, "\"resource\": \""+resource+"\"")
 	if i < 0 {
@@ -201,7 +206,7 @@ func TestEndToEnd(t *testing.T) {
 	bin := syspiBinary(t)
 	root := t.TempDir()
 	gitRepo := gitFixture(t, root)
-	gitRes := "pkg:git/" + filepath.ToSlash(gitRepo)
+	gitRes := "git+file://" + filepath.ToSlash(gitRepo)
 
 	// A .kpar served over HTTP, built by syspi bundle from a package directory.
 	tools := filepath.Join(root, "tools")
@@ -303,9 +308,9 @@ func TestSameTreeFromGitHgSvn(t *testing.T) {
 	bin := syspiBinary(t)
 	root := t.TempDir()
 	sources := map[string]string{
-		"git": "pkg:git/" + filepath.ToSlash(gitFixture(t, root)),
-		"hg":  "pkg:hg/" + filepath.ToSlash(hgFixture(t, root)),
-		"svn": "pkg:svn/" + strings.TrimPrefix(svnFixture(t, root), "file://"),
+		"git": "git+file://" + filepath.ToSlash(gitFixture(t, root)),
+		"hg":  "hg+file://" + filepath.ToSlash(hgFixture(t, root)),
+		"svn": "svn+file://" + strings.TrimPrefix(svnFixture(t, root), "file://"),
 	}
 	var trees []map[string]string
 	var sums []string
@@ -350,7 +355,7 @@ func TestRefusals(t *testing.T) {
 	bin := syspiBinary(t)
 	root := t.TempDir()
 	gitRepo := gitFixture(t, root)
-	gitRes := "pkg:git/" + filepath.ToSlash(gitRepo)
+	gitRes := "git+file://" + filepath.ToSlash(gitRepo)
 
 	// An archive with a traversal member and one with a tampered member.
 	good := filepath.Join(root, "good")
@@ -372,8 +377,8 @@ func TestRefusals(t *testing.T) {
 		{"tag/version mismatch", []string{gitRes + "@1.2.0"}, "carries version 1.2.0 but its .project.json says \"version\": \"1.1.0\""},
 		{"checksum mismatch", []string{tampered}, "checksum mismatch for G.sysml"},
 		{"path traversal", []string{traversal}, "escapes the archive root"},
-		{"pkg:github", []string{"pkg:github/acme/widgets@1.0.0"}, "write pkg:git/<host>/<path>"},
-		{"pkg:cvs", []string{"pkg:cvs/host/repo@1.0.0"}, "not supported; supported: git, svn, hg"},
+		{"pkg:github", []string{"pkg:github/acme/widgets@1.0.0"}, "write pkg:git/github.com/acme/widgets"},
+		{"pkg:cvs", []string{"pkg:cvs/host/repo@1.0.0"}, "pkg:cvs is not supported"},
 		{"unknown host", []string{"pkg:git/no-such-host.invalid/acme/widgets@1.0.0"}, "git ls-remote"},
 	}
 	for _, tc := range cases {

@@ -215,7 +215,7 @@ func cmdAdd(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 			break
 		}
 	}
-	p.Usage = append(p.Usage, project.Usage{Resource: resource, VersionConstraint: constraint})
+	p.Usage = append(p.Usage, project.Usage{Resource: o.Canonical(), VersionConstraint: constraint})
 	if err := p.Validate(); err != nil {
 		return err
 	}

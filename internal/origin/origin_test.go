@@ -7,83 +7,101 @@ import (
 	"testing"
 )
 
-func TestParseCanonical(t *testing.T) {
-	cases := []struct {
-		in                  string
-		kind                Kind
-		vcs, host, path     string
-		sub, ver, source    string
-		identity, canonical string
-	}{
-		{"pkg:git/github.com/acme/widgets@1.0.0", VCS, "git", "github.com", "acme/widgets", "", "1.0.0", "https://github.com/acme/widgets.git", "pkg:git/github.com/acme/widgets", "pkg:git/github.com/acme/widgets@1.0.0"},
-		{"pkg:git/github.com/acme/widgets.git", VCS, "git", "github.com", "acme/widgets", "", "", "https://github.com/acme/widgets.git", "pkg:git/github.com/acme/widgets", "pkg:git/github.com/acme/widgets"},
-		{"pkg:git/git.example.org/group/sub/repo@2.1.0#packages/core", VCS, "git", "git.example.org", "group/sub/repo", "packages/core", "2.1.0", "https://git.example.org/group/sub/repo.git", "pkg:git/git.example.org/group/sub/repo#packages/core", "pkg:git/git.example.org/group/sub/repo@2.1.0#packages/core"},
-		{"pkg:svn/svn.example.org/repos/widgets@1.0.0", VCS, "svn", "svn.example.org", "repos/widgets", "", "1.0.0", "https://svn.example.org/repos/widgets", "pkg:svn/svn.example.org/repos/widgets", "pkg:svn/svn.example.org/repos/widgets@1.0.0"},
-		{"pkg:hg/hg.example.org/widgets", VCS, "hg", "hg.example.org", "widgets", "", "", "https://hg.example.org/widgets", "pkg:hg/hg.example.org/widgets", "pkg:hg/hg.example.org/widgets"},
-		{"pkg:git//srv/git/widgets.git@1.0.0", VCS, "git", "", "/srv/git/widgets.git", "", "1.0.0", "/srv/git/widgets.git", "pkg:git//srv/git/widgets.git", "pkg:git//srv/git/widgets.git@1.0.0"},
-		{"pkg:svn//srv/svn/widgets@1.0.0", VCS, "svn", "", "/srv/svn/widgets", "", "1.0.0", "file:///srv/svn/widgets", "pkg:svn//srv/svn/widgets", "pkg:svn//srv/svn/widgets@1.0.0"},
-		{"pkg:hg//srv/hg/widgets@1.0.0#core", VCS, "hg", "", "/srv/hg/widgets", "core", "1.0.0", "/srv/hg/widgets", "pkg:hg//srv/hg/widgets#core", "pkg:hg//srv/hg/widgets@1.0.0#core"},
-		{"https://github.com/acme/widgets.git@1.0.0", VCS, "git", "github.com", "acme/widgets", "", "1.0.0", "https://github.com/acme/widgets.git", "pkg:git/github.com/acme/widgets", "pkg:git/github.com/acme/widgets@1.0.0"},
-		{"https://GitHub.com/acme/widgets", VCS, "git", "github.com", "acme/widgets", "", "", "https://GitHub.com/acme/widgets", "pkg:git/github.com/acme/widgets", "pkg:git/github.com/acme/widgets"},
-		{"ssh://git@github.com/acme/widgets.git@1.0.0", VCS, "git", "github.com", "acme/widgets", "", "1.0.0", "ssh://git@github.com/acme/widgets.git", "pkg:git/github.com/acme/widgets", "pkg:git/github.com/acme/widgets@1.0.0"},
-		{"https://example.org/team/repo.git@1.2.0#packages/core", VCS, "git", "example.org", "team/repo", "packages/core", "1.2.0", "https://example.org/team/repo.git", "pkg:git/example.org/team/repo#packages/core", "pkg:git/example.org/team/repo@1.2.0#packages/core"},
-		{"ssh://git@example.org/team/repo@1.2.0#packages/core", VCS, "git", "example.org", "team/repo", "packages/core", "1.2.0", "ssh://git@example.org/team/repo", "pkg:git/example.org/team/repo#packages/core", "pkg:git/example.org/team/repo@1.2.0#packages/core"},
-		{"ssh://git@github.com:2222/acme/widgets.git", VCS, "git", "github.com", "acme/widgets", "", "", "ssh://git@github.com:2222/acme/widgets.git", "pkg:git/github.com/acme/widgets", "pkg:git/github.com/acme/widgets"},
-		{"git@github.com:acme/widgets.git@1.0.0", VCS, "git", "github.com", "acme/widgets", "", "1.0.0", "git@github.com:acme/widgets.git", "pkg:git/github.com/acme/widgets", "pkg:git/github.com/acme/widgets@1.0.0"},
-		{"git@github.com:acme/widgets.git#sub/dir", VCS, "git", "github.com", "acme/widgets", "sub/dir", "", "git@github.com:acme/widgets.git", "pkg:git/github.com/acme/widgets#sub/dir", "pkg:git/github.com/acme/widgets#sub/dir"},
-		{"static-http://hg.example.org/repo@1.0.0", VCS, "hg", "hg.example.org", "repo", "", "1.0.0", "static-http://hg.example.org/repo", "pkg:hg/hg.example.org/repo", "pkg:hg/hg.example.org/repo@1.0.0"},
-		{"svn+ssh://svn.example.org/repos/widgets@1.0.0", VCS, "svn", "svn.example.org", "repos/widgets", "", "1.0.0", "svn+ssh://svn.example.org/repos/widgets", "pkg:svn/svn.example.org/repos/widgets", "pkg:svn/svn.example.org/repos/widgets@1.0.0"},
-		{"file:///srv/git/widgets@1.0.0", VCS, "git", "", "/srv/git/widgets", "", "1.0.0", "/srv/git/widgets", "pkg:git//srv/git/widgets", "pkg:git//srv/git/widgets@1.0.0"},
-		{"/srv/git/widgets.git@1.0.0", VCS, "git", "", "/srv/git/widgets.git", "", "1.0.0", "/srv/git/widgets.git", "pkg:git//srv/git/widgets.git", "pkg:git//srv/git/widgets.git@1.0.0"},
-		{"../widgets", LocalDir, "", "", "", "", "", "../widgets", "../widgets", "../widgets"},
-		{"/abs/widgets#core", LocalDir, "", "", "", "", "", "/abs/widgets/core", "/abs/widgets/core", "/abs/widgets/core"},
-		{"./dist/acme-widgets_1.0.0.kpar", LocalArchive, "", "", "", "", "", "./dist/acme-widgets_1.0.0.kpar", "./dist/acme-widgets_1.0.0.kpar", "./dist/acme-widgets_1.0.0.kpar"},
-		{"file:///tmp/w.kpar", LocalArchive, "", "", "", "", "", "/tmp/w.kpar", "/tmp/w.kpar", "/tmp/w.kpar"},
-		{"https://example.org/dl/w.kpar", RemoteArchive, "", "", "", "", "", "https://example.org/dl/w.kpar", "https://example.org/dl/w.kpar", "https://example.org/dl/w.kpar"},
-		{"https://www.omg.org/spec/KerML/20250201/Kernel-Libraries.kpar", Standard, "", "", "", "", "", "https://www.omg.org/spec/KerML/20250201/Kernel-Libraries.kpar", "https://www.omg.org/spec/KerML/20250201/Kernel-Libraries.kpar", "https://www.omg.org/spec/KerML/20250201/Kernel-Libraries.kpar"},
-		{"pkg:sysand/mbse4u/sysmod@5.1.4", Index, "", "", "", "", "5.1.4", "pkg:sysand/mbse4u/sysmod", "pkg:sysand/mbse4u/sysmod", "pkg:sysand/mbse4u/sysmod@5.1.4"},
-	}
-	for _, tc := range cases {
+const ext = "pkg:generic/OpenSysML-Extensions-Library?vcs_url=git%2Bhttps:%2F%2Fgithub.com%2FOpen-MBEE%2FOpenSysML-Extensions-Library"
+
+// Every accepted spelling normalises to one canonical purl and round-trips.
+func TestCanonical(t *testing.T) {
+	for _, tc := range []struct{ in, canonical, source string }{
+		{ext + "%401.0.0", ext + "%401.0.0", "https://github.com/Open-MBEE/OpenSysML-Extensions-Library.git"},
+		{"pkg:generic/OpenSysML-Extensions-Library?vcs_url=git%2Bhttps%3A%2F%2Fgithub.com%2FOpen-MBEE%2FOpenSysML-Extensions-Library%401.0.0", ext + "%401.0.0", "https://github.com/Open-MBEE/OpenSysML-Extensions-Library.git"},
+		{"pkg:git/github.com/Open-MBEE/OpenSysML-Extensions-Library@1.0.0", ext + "%401.0.0", "https://github.com/Open-MBEE/OpenSysML-Extensions-Library.git"},
+		{"pkg:git/github.com/Open-MBEE/OpenSysML-Extensions-Library.git", ext, "https://github.com/Open-MBEE/OpenSysML-Extensions-Library.git"},
+		{"git+https://github.com/Open-MBEE/OpenSysML-Extensions-Library.git@1.0.0", ext + "%401.0.0", "https://github.com/Open-MBEE/OpenSysML-Extensions-Library.git"},
+		{"pkg:generic/OpenSysML-Extensions-Library@1.0.0?vcs_url=git%2Bhttps:%2F%2Fgithub.com%2FOpen-MBEE%2FOpenSysML-Extensions-Library", ext + "%401.0.0", "https://github.com/Open-MBEE/OpenSysML-Extensions-Library.git"},
+		{"git+ssh://git.example.org/team/repo@1.2.0#packages/core", "pkg:generic/repo?vcs_url=git%2Bssh:%2F%2Fgit.example.org%2Fteam%2Frepo%401.2.0%23packages%2Fcore", "ssh://git.example.org/team/repo"},
+		{"git://git.example.org/team/repo", "pkg:generic/repo?vcs_url=git%2Bgit:%2F%2Fgit.example.org%2Fteam%2Frepo", "git://git.example.org/team/repo"},
+		{"hg+https://hg.example.org/repo@2.0.0", "pkg:generic/repo?vcs_url=hg%2Bhttps:%2F%2Fhg.example.org%2Frepo%402.0.0", "https://hg.example.org/repo"},
+		{"hg+static-http://127.0.0.1:8000/repo@1.0.0", "pkg:generic/repo?vcs_url=hg%2Bstatic-http:%2F%2F127.0.0.1:8000%2Frepo%401.0.0", "static-http://127.0.0.1:8000/repo"},
+		{"svn://svn.example.org/pkg@1.0.0", "pkg:generic/pkg?vcs_url=svn%2Bsvn:%2F%2Fsvn.example.org%2Fpkg%401.0.0", "svn://svn.example.org/pkg"},
+		{"svn+https://svn.example.org/repos/pkg", "pkg:generic/pkg?vcs_url=svn%2Bhttps:%2F%2Fsvn.example.org%2Frepos%2Fpkg", "https://svn.example.org/repos/pkg"},
+		{"svn+ssh://svn.example.org/repos/pkg", "pkg:generic/pkg?vcs_url=svn%2Bssh:%2F%2Fsvn.example.org%2Frepos%2Fpkg", "svn+ssh://svn.example.org/repos/pkg"},
+		{"git+file:///srv/git/widgets@1.0.0#packages/gears", "pkg:generic/widgets?vcs_url=git%2Bfile:%2F%2F%2Fsrv%2Fgit%2Fwidgets%401.0.0%23packages%2Fgears", "/srv/git/widgets"},
+		{"svn+file:///srv/svn/widgets", "pkg:generic/widgets?vcs_url=svn%2Bfile:%2F%2F%2Fsrv%2Fsvn%2Fwidgets", "file:///srv/svn/widgets"},
+	} {
 		o, err := Parse(tc.in)
 		if err != nil {
-			t.Errorf("Parse(%q): %v", tc.in, err)
+			t.Errorf("%s: %v", tc.in, err)
 			continue
 		}
-		if o.Kind != tc.kind || o.VCS != tc.vcs || o.Host != tc.host || o.Path != tc.path || o.Subpath != tc.sub || o.Version != tc.ver || o.Source != tc.source {
-			t.Errorf("Parse(%q) = %+v", tc.in, *o)
+		if o.Canonical() != tc.canonical || o.Source != tc.source {
+			t.Errorf("%s:\n canonical %s\n want      %s\n source %s", tc.in, o.Canonical(), tc.canonical, o.Source)
+			continue
 		}
-		if o.Identity() != tc.identity || o.Canonical() != tc.canonical {
-			t.Errorf("Parse(%q): identity %q canonical %q", tc.in, o.Identity(), o.Canonical())
+		again, err := Parse(o.Canonical())
+		if err != nil || again.Canonical() != o.Canonical() || again.Identity() != o.Identity() || again.Source != o.Source || again.Version != o.Version || again.Subpath != o.Subpath {
+			t.Errorf("%s: canonical form does not round-trip: %v %+v", tc.in, err, again)
+		}
+		if strings.Contains(o.Identity(), "%40") {
+			t.Errorf("%s: identity must be version-free: %s", tc.in, o.Identity())
 		}
 	}
 }
 
-func TestParseRefusals(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"pkg:github/acme/widgets@1.0.0", "pkg:git/github.com/acme/widgets"},
-		{"pkg:gitlab/group/repo", "pkg:git/"},
-		{"pkg:cvs/host/path", "not supported; supported: git, svn, hg"},
-		{"pkg:npm/left-pad", "not supported"},
-		{"pkg:git/github.com", "expected pkg:git/<host>/<path>"},
-		{"pkg:git/github.com/acme/widgets@latest", "not a semantic version"},
-		{"pkg:git/github.com/acme/widgets@", "empty version"},
-		{"pkg:git/github.com/acme/../etc", `".."`},
-		{"pkg:sysand/mbse4u", "expected pkg:sysand/<publisher>/<name>"},
-		{"https://user:pw@github.com/acme/widgets", "credentials"},
-		{"ftp://example.org/w.kpar", "unsupported URL scheme"},
-		{"file://host/share/w.kpar", "file:///path"},
-		{"", "empty resource"},
-		{"./w.kpar#core", "cannot have a #<subpath>"},
-		{"https://example.org/w.kpar#core", "cannot have a #<subpath>"},
-	}
-	for _, tc := range cases {
+func TestArchivesAndDirectories(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		kind Kind
+	}{
+		{"https://www.omg.org/spec/SysML/20250201/Systems-Library.kpar", Standard},
+		{"https://example.org/dist/acme-tools_1.0.0.kpar", RemoteArchive},
+		{"file:///srv/acme-tools_1.0.0.kpar", LocalArchive},
+		{"./vendor/tools.kpar", LocalArchive},
+		{"../tools", LocalDir},
+		{"file:///srv/tools", LocalDir},
+	} {
 		o, err := Parse(tc.in)
-		if err == nil {
-			t.Errorf("Parse(%q) accepted: %+v", tc.in, *o)
-			continue
+		if err != nil || o.Kind != tc.kind {
+			t.Errorf("%s: %v %v", tc.in, o, err)
 		}
-		if !strings.Contains(err.Error(), tc.want) {
-			t.Errorf("Parse(%q) error %q lacks %q", tc.in, err, tc.want)
+	}
+}
+
+func TestRefused(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"pkg:svn/svn.example.org/pkg@1.0.0", "pkg:svn is not a Package-URL type; write pkg:generic/<name>?vcs_url="},
+		{"pkg:hg/hg.example.org/repo@1.0.0", "pkg:hg is not a Package-URL type"},
+		{"pkg:sysand/acme/tools", "pkg:sysand is not supported; write pkg:generic"},
+		{"pkg:github/acme/widgets@1.0.0", "write pkg:git/github.com/acme/widgets@1.0.0 or pkg:generic"},
+		{"pkg:cvs/host/repo@1.0.0", "pkg:cvs is not supported"},
+		{"https://github.com/acme/widgets@1.0.0", "only dereferenced as a project interchange file (.kpar); a repository is written as pkg:generic"},
+		{"https://github.com/acme/widgets.git", "only dereferenced as a project interchange file"},
+		{"git@github.com:acme/widgets.git@1.0.0", "write git+ssh://github.com/acme/widgets"},
+		{"ssh://git@github.com/acme/widgets@1.0.0", "unsupported URL scheme; a repository is written as pkg:generic"},
+		{"file:///srv/git/widgets@1.0.0", "a repository on this machine is git+file:///srv/git/widgets@1.0.0"},
+		{"/srv/git/widgets@1.0.0", "a repository on this machine is git+file:///srv/git/widgets@1.0.0"},
+		{"pkg:git//srv/git/widgets@1.0.0", "a repository on this machine is git+file:///srv/git/widgets@1.0.0"},
+		{"git+https://user:pw@github.com/acme/widgets", "user name or password in the host is not supported (ECMA-427 Annex B.3.5)"},
+		{"hg://hg.example.org/repo", "hg+hg is not a vcs_url scheme for hg (ECMA-427 Annex B.3.5 allows hg+http, hg+https, hg+static-http, hg+ssh, hg+file)"},
+		{"git+ftp://host/repo", "git+ftp is not a vcs_url scheme for git"},
+		{"bzr+https://host/repo", "version-control system \"bzr\" is not supported; supported: git, svn, hg"},
+		{"pkg:generic/widgets", "pkg:generic needs a vcs_url qualifier"},
+		{"pkg:generic/other?vcs_url=git%2Bhttps:%2F%2Fgithub.com%2Facme%2Fwidgets", "purl name \"other\" must be the repository's last path segment \"widgets\""},
+		{"pkg:generic/widgets?vcs_url=git%2Bhttps:%2F%2Fgithub.com%2Facme%2Fwidgets&arch=x", "qualifier \"arch\" is not supported"},
+		{"pkg:generic/widgets@1.0.0?vcs_url=git%2Bhttps:%2F%2Fgithub.com%2Facme%2Fwidgets%402.0.0", "version 1.0.0 in the purl and 2.0.0 in vcs_url disagree"},
+		{"pkg:git/codeberg.org/forgejo/forgejo@a72d2c07cfca03b55371089de6aa230d8c951fa0#options", "looks like a commit id"},
+		{"git+https://github.com/acme/widgets@latest", "\"latest\" after @ is not a semantic version"},
+		{"https://example.org/x.kpar#sub", "a .kpar cannot have a #<subpath>"},
+		{"pkg:generic/widgets?vcs_url=git%2Bhttps:%2F%2Fgithub.com%2Facme%2F..%2Fwidgets", "must not contain \"..\""},
+	} {
+		_, err := Parse(tc.in)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v\n want %q", tc.in, err, tc.want)
 		}
+	}
+}
+
+func TestEncode(t *testing.T) {
+	if got := Encode("git+https://h/p q@1.0.0#s/t"); got != "git%2Bhttps:%2F%2Fh%2Fp%20q%401.0.0%23s%2Ft" {
+		t.Fatal(got)
 	}
 }
