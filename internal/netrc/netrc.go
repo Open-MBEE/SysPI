@@ -8,7 +8,9 @@ package netrc
 
 import (
 	"bufio"
+	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -147,12 +149,46 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		base = http.DefaultTransport
 	}
 	if req.Header.Get("Authorization") == "" {
-		if c, ok := t.File.Lookup(req.URL.Hostname()); ok && c.Login != "" {
+		if c, ok := t.credential(req); ok && c.Login != "" {
 			req = req.Clone(req.Context())
 			req.SetBasicAuth(c.Login, c.Password)
 		}
 	}
 	return base.RoundTrip(req)
+}
+
+// credential picks the entry for a request; once a redirect chain has left
+// the first origin only an explicit machine entry counts, never the default.
+func (t *Transport) credential(req *http.Request) (Credential, bool) {
+	first := req
+	for first.Response != nil && first.Response.Request != nil {
+		first = first.Response.Request
+	}
+	for hop := req; hop != nil; hop = hop.Response.Request {
+		if hop.URL.Scheme != first.URL.Scheme || hop.URL.Host != first.URL.Host {
+			c, ok := t.File.Machines[strings.ToLower(req.URL.Hostname())]
+			return c, ok
+		}
+		if hop.Response == nil {
+			break
+		}
+	}
+	return t.File.Lookup(req.URL.Hostname())
+}
+
+// RedactURL drops the user info and the query of a URL for diagnostics,
+// so no token or password reaches output or logs.
+func RedactURL(s string) string {
+	u, err := url.Parse(s)
+	if err != nil {
+		return s
+	}
+	u.User = nil
+	if u.RawQuery != "" || u.ForceQuery {
+		u.RawQuery, u.ForceQuery = "", false
+		return u.String() + "?..."
+	}
+	return u.String()
 }
 
 // Client is an HTTP client using the user's netrc; proxy settings come from
@@ -163,4 +199,13 @@ func Client() (*http.Client, error) {
 		return nil, err
 	}
 	return &http.Client{Transport: &Transport{File: f}}, nil
+}
+
+// Hint is the actionable line for an HTTP 401 or 403: a netrc entry for
+// the host.
+func Hint(status int, host string) string {
+	if status != http.StatusUnauthorized && status != http.StatusForbidden {
+		return ""
+	}
+	return fmt.Sprintf("\n  hint: the server wants credentials; add `machine %s login <user> password <secret>` to your netrc ($NETRC, else ~/.netrc, %%USERPROFILE%%\\_netrc on Windows)", host)
 }

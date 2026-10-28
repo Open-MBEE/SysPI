@@ -16,7 +16,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
+
+	"github.com/Open-MBEE/SysPI/internal/origin"
 )
 
 var (
@@ -67,20 +68,10 @@ func sh(t *testing.T, dir string, name string, args ...string) string {
 	return out
 }
 
-// emptyIndex stands in for sysand's default index so no test reaches
-// https://sysand.com; a test that wants another default overrides it.
-var emptyIndex = sync.OnceValue(func() string {
-	dir, err := os.MkdirTemp("", "syspi-empty-index-*")
-	if err != nil {
-		panic(err)
-	}
-	return dir
-})
-
 func shErr(dir string, env []string, name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	cmd.Env = append(append(append(os.Environ(), gitEnv...), "SYSAND_DEFAULT_INDEX="+emptyIndex()), env...)
+	cmd.Env = append(append(os.Environ(), gitEnv...), env...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -191,6 +182,9 @@ func treeFiles(t *testing.T, dir string) map[string]string {
 }
 
 func lockField(t *testing.T, lockJSON, resource, field string) string {
+	if o, err := origin.Parse(resource); err == nil {
+		resource = o.Identity()
+	}
 	t.Helper()
 	i := strings.Index(lockJSON, "\"resource\": \""+resource+"\"")
 	if i < 0 {
@@ -212,7 +206,7 @@ func TestEndToEnd(t *testing.T) {
 	bin := syspiBinary(t)
 	root := t.TempDir()
 	gitRepo := gitFixture(t, root)
-	gitRes := "pkg:git/" + filepath.ToSlash(gitRepo)
+	gitRes := "git+file://" + filepath.ToSlash(gitRepo)
 
 	// A .kpar served over HTTP, built by syspi bundle from a package directory.
 	tools := filepath.Join(root, "tools")
@@ -314,9 +308,9 @@ func TestSameTreeFromGitHgSvn(t *testing.T) {
 	bin := syspiBinary(t)
 	root := t.TempDir()
 	sources := map[string]string{
-		"git": "pkg:git/" + filepath.ToSlash(gitFixture(t, root)),
-		"hg":  "pkg:hg/" + filepath.ToSlash(hgFixture(t, root)),
-		"svn": "pkg:svn/" + strings.TrimPrefix(svnFixture(t, root), "file://"),
+		"git": "git+file://" + filepath.ToSlash(gitFixture(t, root)),
+		"hg":  "hg+file://" + filepath.ToSlash(hgFixture(t, root)),
+		"svn": "svn+file://" + strings.TrimPrefix(svnFixture(t, root), "file://"),
 	}
 	var trees []map[string]string
 	var sums []string
@@ -361,7 +355,7 @@ func TestRefusals(t *testing.T) {
 	bin := syspiBinary(t)
 	root := t.TempDir()
 	gitRepo := gitFixture(t, root)
-	gitRes := "pkg:git/" + filepath.ToSlash(gitRepo)
+	gitRes := "git+file://" + filepath.ToSlash(gitRepo)
 
 	// An archive with a traversal member and one with a tampered member.
 	good := filepath.Join(root, "good")
@@ -383,8 +377,8 @@ func TestRefusals(t *testing.T) {
 		{"tag/version mismatch", []string{gitRes + "@1.2.0"}, "carries version 1.2.0 but its .project.json says \"version\": \"1.1.0\""},
 		{"checksum mismatch", []string{tampered}, "checksum mismatch for G.sysml"},
 		{"path traversal", []string{traversal}, "escapes the archive root"},
-		{"pkg:github", []string{"pkg:github/acme/widgets@1.0.0"}, "write pkg:git/<host>/<path>"},
-		{"pkg:cvs", []string{"pkg:cvs/host/repo@1.0.0"}, "not supported; supported: git, svn, hg"},
+		{"pkg:github", []string{"pkg:github/acme/widgets@1.0.0"}, "write pkg:git/github.com/acme/widgets"},
+		{"pkg:cvs", []string{"pkg:cvs/host/repo@1.0.0"}, "pkg:cvs is not supported"},
 		{"unknown host", []string{"pkg:git/no-such-host.invalid/acme/widgets@1.0.0"}, "git ls-remote"},
 	}
 	for _, tc := range cases {
@@ -418,41 +412,4 @@ func TestRefusals(t *testing.T) {
 	if err == nil || !strings.Contains(out, `"git" is required`) || strings.Contains(out, "panic") {
 		t.Fatalf("missing git: %v\n%s", err, out)
 	}
-}
-
-func TestIndexEmitAndResolve(t *testing.T) {
-	bin := syspiBinary(t)
-	root := t.TempDir()
-	pkg := filepath.Join(root, "tools")
-	write(t, pkg, ".project.json", "{\n  \"name\": \"tools\",\n  \"publisher\": \"acme\",\n  \"version\": \"3.0.0\"\n}\n")
-	write(t, pkg, "Tools.sysml", "package Tools;\n")
-	idx := filepath.Join(root, "index")
-	sh(t, root, bin, "index", "emit", "-o", idx, pkg)
-	for _, want := range []string{"index.json", "acme/tools/versions.json", "acme/tools/3.0.0/project.kpar", "acme/tools/3.0.0/.project.json", "acme/tools/3.0.0/.meta.json"} {
-		if _, err := os.Stat(filepath.Join(idx, filepath.FromSlash(want))); err != nil {
-			t.Errorf("%s: %v", want, err)
-		}
-	}
-	vj, _ := os.ReadFile(filepath.Join(idx, "acme", "tools", "versions.json"))
-	for _, want := range []string{`"version": "3.0.0"`, `"kpar_size"`, `"kpar_digest": "sha256:`, `"usage": []`} {
-		if !strings.Contains(string(vj), want) {
-			t.Errorf("versions.json lacks %s:\n%s", want, vj)
-		}
-	}
-	srv := httptest.NewServer(http.FileServer(http.Dir(idx)))
-	defer srv.Close()
-	app := filepath.Join(root, "app")
-	os.MkdirAll(app, 0o755)
-	sh(t, app, bin, "init", "-name", "app")
-	sh(t, app, bin, "add", "-index", srv.URL, "pkg:sysand/acme/tools", "^3.0.0")
-	if _, err := os.Stat(filepath.Join(app, "lib", "acme-tools_3.0.0.kpar")); err != nil {
-		t.Fatal(err)
-	}
-	lk, _ := os.ReadFile(filepath.Join(app, ".project.lock.json"))
-	if lockField(t, string(lk), "pkg:sysand/acme/tools", "version") != "3.0.0" {
-		t.Fatalf("lock:\n%s", lk)
-	}
-	srv.Close()
-	sh(t, app, bin, "install", "-offline")
-	_ = time.Second
 }

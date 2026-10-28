@@ -13,10 +13,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"time"
 
-	"github.com/Open-MBEE/SysPI/internal/index"
 	"github.com/Open-MBEE/SysPI/internal/install"
 	"github.com/Open-MBEE/SysPI/internal/origin"
 	"github.com/Open-MBEE/SysPI/internal/project"
@@ -39,7 +37,6 @@ Commands:
   sync      same as install
   lock      resolve and write .project.lock.json without installing
   bundle    build a deterministic .kpar from a project directory
-  index     emit a static sysand-compatible index (syspi index emit)
   version   print the version
 
 A package is any git, svn or hg repository with .project.json at a tag:
@@ -70,8 +67,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdInstall(ctx, args[0], args[1:], stdout, stderr, true)
 	case "bundle":
 		err = cmdBundle(ctx, args[1:], stdout, stderr)
-	case "index":
-		err = cmdIndex(args[1:], stdout, stderr)
 	case "version", "-version", "--version":
 		fmt.Fprintln(stdout, "syspi", Version)
 	default:
@@ -96,71 +91,22 @@ var errUsage = errors.New("usage")
 // commonFlags are the flags every project command takes.
 type commonFlags struct {
 	dir     string
-	index   string
-	noIndex bool
 	offline bool
 	quiet   bool
 }
 
 func (c *commonFlags) bind(fs *flag.FlagSet) {
 	fs.StringVar(&c.dir, "C", ".", "project directory (holding .project.json)")
-	fs.StringVar(&c.index, "index", os.Getenv("SYSPI_INDEX"), "comma-separated sysand index URLs, URL templates or directories for pkg:sysand/ resources, tried before $SYSAND_INDEX and the default index ($SYSAND_DEFAULT_INDEX, else https://sysand.com) (default $SYSPI_INDEX)")
-	fs.BoolVar(&c.noIndex, "no-index", false, "use no sysand index at all, not even the default")
 	fs.BoolVar(&c.offline, "offline", false, "never contact a repository or server; the lock and lib/ must already satisfy the project")
 	fs.BoolVar(&c.quiet, "q", false, "print only errors")
 }
 
-func (c *commonFlags) options(stderr io.Writer, lockOnly bool) (install.Options, error) {
+func (c *commonFlags) options(stderr io.Writer, lockOnly bool) install.Options {
 	log := stderr
 	if c.quiet {
 		log = io.Discard
 	}
-	indexes, err := c.indexes()
-	if err != nil {
-		return install.Options{}, err
-	}
-	return install.Options{Root: c.dir, Indexes: indexes, Offline: c.offline, Log: log, LockOnly: lockOnly}, nil
-}
-
-// DefaultIndex is sysand's public index, consulted last unless
-// SYSAND_DEFAULT_INDEX names other defaults or -no-index is given.
-const DefaultIndex = "https://sysand.com"
-
-// indexes is the ordered index list: -index/$SYSPI_INDEX, then
-// $SYSAND_INDEX, then the defaults; all comma-separated like sysand's.
-func (c *commonFlags) indexes() ([]string, error) {
-	if c.noIndex {
-		return nil, nil
-	}
-	var out []string
-	add := func(name, what, value string, set bool) error {
-		if !set {
-			return nil
-		}
-		for _, v := range strings.Split(value, ",") {
-			if strings.TrimSpace(v) == "" {
-				return fmt.Errorf("invalid `%s` %s: index URL is empty\nhint: check for a stray `,`, or for `%s` set to an empty value", name, what, name)
-			}
-			out = append(out, strings.TrimSpace(v))
-		}
-		return nil
-	}
-	if err := add("-index/SYSPI_INDEX", "value", c.index, c.index != ""); err != nil {
-		return nil, err
-	}
-	v, set := os.LookupEnv("SYSAND_INDEX")
-	if err := add("SYSAND_INDEX", "environment variable", v, set); err != nil {
-		return nil, err
-	}
-	v, set = os.LookupEnv("SYSAND_DEFAULT_INDEX")
-	if set {
-		if err := add("SYSAND_DEFAULT_INDEX", "environment variable", v, true); err != nil {
-			return nil, err
-		}
-	} else {
-		out = append(out, DefaultIndex)
-	}
-	return out, nil
+	return install.Options{Root: c.dir, Offline: c.offline, Log: log, LockOnly: lockOnly}
 }
 
 func newFlagSet(name string, stderr io.Writer, synopsis string) *flag.FlagSet {
@@ -269,12 +215,8 @@ func cmdAdd(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 			break
 		}
 	}
-	p.Usage = append(p.Usage, project.Usage{Resource: resource, VersionConstraint: constraint})
+	p.Usage = append(p.Usage, project.Usage{Resource: o.Canonical(), VersionConstraint: constraint})
 	if err := p.Validate(); err != nil {
-		return err
-	}
-	opts, err := c.options(stderr, false)
-	if err != nil {
 		return err
 	}
 	// Resolve against a copy first so a failing add leaves .project.json unchanged.
@@ -285,7 +227,7 @@ func cmdAdd(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 	if err := p.Write(c.dir); err != nil {
 		return err
 	}
-	res, err := install.Run(ctx, opts)
+	res, err := install.Run(ctx, c.options(stderr, false))
 	if err != nil {
 		os.WriteFile(filepath.Join(c.dir, project.ProjectFile), data, 0o644)
 		return err
@@ -305,11 +247,7 @@ func cmdInstall(ctx context.Context, name string, args []string, stdout, stderr 
 		fs.Usage()
 		return errUsage
 	}
-	opts, err := c.options(stderr, lockOnly)
-	if err != nil {
-		return err
-	}
-	res, err := install.Run(ctx, opts)
+	res, err := install.Run(ctx, c.options(stderr, lockOnly))
 	if err != nil {
 		return err
 	}
@@ -395,26 +333,4 @@ func createdFor(ctx context.Context, dir string) time.Time {
 		return t
 	}
 	return project.CreatedTime()
-}
-
-func cmdIndex(args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "emit" {
-		fmt.Fprintln(stderr, "Usage: syspi index emit [-o <index dir>] <package dir or .kpar>...")
-		return errUsage
-	}
-	fs := newFlagSet("index emit", stderr, "[-o <index dir>] <package dir or .kpar>...")
-	out := fs.String("o", "index", "directory to write the index into")
-	if err := parse(fs, args[1:]); err != nil {
-		return err
-	}
-	if fs.NArg() == 0 {
-		fs.Usage()
-		return errUsage
-	}
-	iris, err := index.Emit(*out, fs.Args(), func(dir string) time.Time { return createdFor(context.Background(), dir) })
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(stdout, "wrote %s: %s\n", *out, strings.Join(iris, ", "))
-	return nil
 }

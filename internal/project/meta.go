@@ -25,7 +25,7 @@ type Checksum struct {
 }
 
 // Checksums is the list of checksums recorded for one member. Table 13
-// specifies a list; sysand and the packages built with it write a single
+// specifies a list; some producers write a single
 // object instead, so both shapes are read. Lists are written.
 type Checksums []Checksum
 
@@ -49,7 +49,7 @@ func (c *Checksums) UnmarshalJSON(data []byte) error {
 }
 
 // Recorded reports whether the list carries a checksum that can be checked:
-// an "algorithm": "NONE" entry (sysand's placeholder) records nothing.
+// an "algorithm": "NONE" entry (a placeholder some producers write) records nothing.
 func (c Checksums) Recorded() bool {
 	for _, s := range c {
 		if !strings.EqualFold(s.Algorithm, "NONE") {
@@ -151,7 +151,7 @@ func Members(dir string, skip ...string) ([]string, error) {
 		rel, _ := filepath.Rel(dir, p)
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
-			if p != dir && (d.Name() == ".git" || d.Name() == ".hg" || d.Name() == ".svn" || rel == LibDir || rel == SysandLibDir || d.Name() == ".sysand") {
+			if p != dir && (d.Name() == ".git" || d.Name() == ".hg" || d.Name() == ".svn" || rel == LibDir) {
 				return filepath.SkipDir
 			}
 			return nil

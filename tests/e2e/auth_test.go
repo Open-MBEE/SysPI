@@ -50,7 +50,7 @@ func TestAuthGitCredentialHelper(t *testing.T) {
 	srv := httptest.NewServer(basicAuth("alice", "s3cret", &seen, http.StripPrefix("/widgets.git/", http.FileServer(http.Dir(bare)))))
 	defer srv.Close()
 	// The plain clone URL keeps the http transport; its identity is pkg:git/<host:port>/widgets.git.
-	res := srv.URL + "/widgets.git@1.0.0"
+	res := "git+" + srv.URL + "/widgets.git@1.0.0"
 
 	// Without credentials: a clear hint, no prompt, no hang.
 	app := initApp(t, root, "app-nocred")
@@ -90,13 +90,13 @@ func TestAuthHgAuthSection(t *testing.T) {
 	hgrc := filepath.Join(root, "hgrc")
 	os.WriteFile(hgrc, []byte("[auth]\npkg.prefix = http://"+hostport+"/repo\npkg.username = alice\npkg.password = s3cret\n"), 0o600)
 	app := initApp(t, root, "app-hg-nocred")
-	out, err := shErr(app, []string{"HGRCPATH=" + filepath.Join(root, "empty-hgrc")}, bin, "add", "static-http://"+hostport+"/repo@1.0.0")
+	out, err := shErr(app, []string{"HGRCPATH=" + filepath.Join(root, "empty-hgrc")}, bin, "add", "hg+static-http://"+hostport+"/repo@1.0.0")
 	if err == nil || !strings.Contains(out, "hint: hg needs credentials") {
 		t.Fatalf("expected the hg auth hint: %v\n%s", err, out)
 	}
 	app2 := initApp(t, root, "app-hg-cred")
 	// HGPLAIN=1 is set by syspi itself; [auth] must still apply.
-	if out, err := shErr(app2, []string{"HGRCPATH=" + hgrc, "HGPLAIN=1"}, bin, "add", "static-http://"+hostport+"/repo@1.0.0"); err != nil {
+	if out, err := shErr(app2, []string{"HGRCPATH=" + hgrc, "HGPLAIN=1"}, bin, "add", "hg+static-http://"+hostport+"/repo@1.0.0"); err != nil {
 		t.Fatalf("add with [auth]: %v\n%s", err, out)
 	}
 	if _, err := os.Stat(filepath.Join(app2, "lib", "acme-widgets_1.0.0", "Widgets.sysml")); err != nil {
@@ -190,37 +190,32 @@ func TestAuthHTTPNetrc(t *testing.T) {
 	pkg := filepath.Join(root, "tools")
 	write(t, pkg, ".project.json", "{\n  \"name\": \"tools\",\n  \"publisher\": \"acme\",\n  \"version\": \"3.0.0\"\n}\n")
 	write(t, pkg, "Tools.sysml", "package Tools;\n")
-	idx := filepath.Join(root, "index")
-	sh(t, root, bin, "index", "emit", "-o", idx, pkg)
+	files := filepath.Join(root, "files")
+	os.MkdirAll(files, 0o755)
+	sh(t, root, bin, "bundle", "-o", filepath.Join(files, "tools.kpar"), pkg)
 	var seen int32
-	srv := httptest.NewServer(basicAuth("alice", "s3cret", &seen, http.FileServer(http.Dir(idx))))
+	srv := httptest.NewServer(basicAuth("alice", "s3cret", &seen, http.FileServer(http.Dir(files))))
 	defer srv.Close()
-	host, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
-	_ = port
+	host, _, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
 
 	app := initApp(t, root, "app-http-nocred")
-	out, err := shErr(app, []string{"NETRC=" + filepath.Join(root, "no-netrc")}, bin, "add", "-index", srv.URL, "pkg:sysand/acme/tools")
+	out, err := shErr(app, []string{"NETRC=" + filepath.Join(root, "no-netrc")}, bin, "add", srv.URL+"/tools.kpar")
 	if err == nil || !strings.Contains(out, "HTTP 401") || !strings.Contains(out, "hint: the server wants credentials") || !strings.Contains(out, "netrc") {
 		t.Fatalf("expected the netrc hint: %v\n%s", err, out)
 	}
 	netrcFile := filepath.Join(root, "netrc")
 	os.WriteFile(netrcFile, []byte("machine "+host+" login alice password s3cret\n"), 0o600)
 	app2 := initApp(t, root, "app-http-cred")
-	if out, err := shErr(app2, []string{"NETRC=" + netrcFile}, bin, "add", "-index", srv.URL, "pkg:sysand/acme/tools"); err != nil {
+	if out, err := shErr(app2, []string{"NETRC=" + netrcFile}, bin, "add", srv.URL+"/tools.kpar"); err != nil {
 		t.Fatalf("add with netrc: %v\n%s", err, out)
 	}
 	if _, err := os.Stat(filepath.Join(app2, "lib", "acme-tools_3.0.0.kpar")); err != nil {
 		t.Fatal(err)
 	}
-	if atomic.LoadInt32(&seen) < 2 {
-		t.Fatalf("expected versions.json and project.kpar to be fetched with credentials, saw %d", seen)
+	if atomic.LoadInt32(&seen) < 1 {
+		t.Fatal("expected the archive to be fetched with credentials")
 	}
-	// A remote .kpar behind the same server: same path.
-	app3 := initApp(t, root, "app-http-kpar")
-	if out, err := shErr(app3, []string{"NETRC=" + netrcFile}, bin, "add", srv.URL+"/acme/tools/3.0.0/project.kpar"); err != nil {
-		t.Fatalf("remote .kpar with netrc: %v\n%s", err, out)
-	}
-	lk, _ := os.ReadFile(filepath.Join(app3, ".project.lock.json"))
+	lk, _ := os.ReadFile(filepath.Join(app2, ".project.lock.json"))
 	if strings.Contains(string(lk), "s3cret") {
 		t.Fatal("credentials leaked into the lock")
 	}

@@ -8,7 +8,6 @@ package install
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,9 +17,8 @@ import (
 	"strings"
 
 	"github.com/Open-MBEE/SysPI/internal/digest"
-	"github.com/Open-MBEE/SysPI/internal/httpauth"
-	"github.com/Open-MBEE/SysPI/internal/index"
 	"github.com/Open-MBEE/SysPI/internal/lock"
+	"github.com/Open-MBEE/SysPI/internal/netrc"
 	"github.com/Open-MBEE/SysPI/internal/origin"
 	"github.com/Open-MBEE/SysPI/internal/project"
 	"github.com/Open-MBEE/SysPI/internal/vcs"
@@ -34,10 +32,6 @@ type Options struct {
 	// Offline refuses every network and repository access; the lock and
 	// lib/ must already satisfy the project.
 	Offline bool
-	// Indexes are the sysand indexes (URLs, URL templates or directories)
-	// pkg:sysand/ resources resolve through, tried in order; empty means
-	// none configured.
-	Indexes []string
 	// Log receives one line per action; nil discards.
 	Log io.Writer
 	// HTTP fetches remote archives and index files; nil uses http.DefaultClient.
@@ -76,14 +70,11 @@ type resolver struct {
 	stage string
 	items []staged
 	slots map[string]slot
-	// indexes caches opened sysand indexes by position in opts.Indexes;
-	// an index is discovered when a lookup first reaches it.
-	indexes map[int]*index.Index
-	http    *http.Client
+	http  *http.Client
 }
 
 // httpClient builds the credential-carrying client on first use, so an
-// offline run never reads SYSAND_CRED_* or the netrc.
+// offline run never reads the netrc.
 func (r *resolver) httpClient() (*http.Client, error) {
 	if r.http != nil {
 		return r.http, nil
@@ -92,9 +83,9 @@ func (r *resolver) httpClient() (*http.Client, error) {
 		r.http = r.opts.HTTP
 		return r.http, nil
 	}
-	c, err := httpauth.Client(func(msg string) { fmt.Fprintln(r.opts.Log, "warning:", msg) })
+	c, err := netrc.Client()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading %s: %v", netrc.Path(), err)
 	}
 	r.http = c
 	return c, nil
@@ -125,6 +116,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if old == nil {
 		old = lock.New()
 	}
+	keyResources(old)
 	r := &resolver{ctx: ctx, opts: opts, proj: proj, old: old, fresh: lock.New(), chosen: map[string]*lock.Entry{}, res: &Result{}, libDir: filepath.Join(root, project.LibDir), slots: map[string]slot{}}
 	for _, u := range proj.Usage {
 		c, err := usageConstraint(u)
@@ -292,8 +284,6 @@ func (r *resolver) resolve(req request) error {
 		e, err = r.resolveLocalArchive(o, req)
 	case origin.RemoteArchive:
 		e, err = r.resolveRemoteArchive(o, req)
-	case origin.Index:
-		e, err = r.resolveIndex(o, req)
 	case origin.VCS:
 		e, err = r.resolveVCS(o, req)
 	default:
@@ -416,6 +406,34 @@ func (r *resolver) locked(id string, c version.Constraint) *lock.Entry {
 	return old
 }
 
+// lockedRepository is locked by the repository key, but only for an entry
+// whose recorded source is the requested location: repo and repo.git differ.
+func (r *resolver) lockedRepository(o *origin.Origin, c version.Constraint) *lock.Entry {
+	old := r.locked(o.Key(), c)
+	if old != nil && old.Source != "" && locationKey(old.Source) != locationKey(o.Source) {
+		return nil
+	}
+	return old
+}
+
+// locationKey normalises a repository source for comparison: a <vcs>+ scheme
+// prefix and host case do not matter, a file URL is its path; .git does.
+func locationKey(src string) string {
+	scheme, rest, ok := strings.Cut(src, "://")
+	if !ok {
+		return src
+	}
+	if _, t, ok := strings.Cut(scheme, "+"); ok {
+		scheme = t
+	}
+	scheme = strings.ToLower(scheme)
+	if scheme == "file" {
+		return filepath.FromSlash(rest)
+	}
+	host, p, _ := strings.Cut(rest, "/")
+	return scheme + "://" + strings.ToLower(host) + "/" + p
+}
+
 // reuseLocked keeps a locked archive entry when only the lock is being
 // written, or when lib/ already holds the archive with the locked digest.
 func (r *resolver) reuseLocked(old *lock.Entry) (*lock.Entry, bool, error) {
@@ -454,9 +472,26 @@ func (r *resolver) requeueLocked(e *lock.Entry, old *lock.Entry) error {
 	return nil
 }
 
+// keyResources rewrites each lock resource to its matching key, so a lock
+// written in an older or differently suffixed spelling still matches its usage.
+func keyResources(l *lock.Lock) {
+	for i := range l.Packages {
+		l.Packages[i].Resource = lockKey(l.Packages[i].Resource)
+	}
+}
+
+// lockKey is origin.Key for a repository resource and the resource itself otherwise.
+func lockKey(resource string) string {
+	if o, err := origin.Parse(resource); err == nil && o.Kind == origin.VCS {
+		return o.Key()
+	}
+	return resource
+}
+
 func (r *resolver) download(url string, dst string) error {
+	shown := netrc.RedactURL(url)
 	if r.opts.Offline {
-		return fmt.Errorf("offline: %s is not installed and would have to be downloaded", url)
+		return fmt.Errorf("offline: %s is not installed and would have to be downloaded", shown)
 	}
 	req, err := http.NewRequestWithContext(r.ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -472,7 +507,7 @@ func (r *resolver) download(url string, dst string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s: HTTP %s%s", httpauth.RedactURL(url), resp.Status, httpauth.Hint(resp.StatusCode, url, req.URL.Hostname()))
+		return fmt.Errorf("%s: HTTP %s%s", shown, resp.Status, netrc.Hint(resp.StatusCode, req.URL.Hostname()))
 	}
 	f, err := os.Create(dst)
 	if err != nil {
@@ -484,7 +519,7 @@ func (r *resolver) download(url string, dst string) error {
 		return err
 	}
 	if n > project.MaxArchiveSize {
-		return fmt.Errorf("%s: larger than the %d byte limit", httpauth.RedactURL(url), project.MaxArchiveSize)
+		return fmt.Errorf("%s: larger than the %d byte limit", shown, project.MaxArchiveSize)
 	}
 	return nil
 }
@@ -520,118 +555,6 @@ func (r *resolver) resolveRemoteArchive(o *origin.Origin, req request) (*lock.En
 	return e, r.installArchive(e, a, file)
 }
 
-// openIndex runs discovery on the i-th configured index the first time a
-// lookup reaches it; a later index that is down never blocks an earlier
-// one that has the package.
-func (r *resolver) openIndex(i int) (*index.Index, error) {
-	if x, ok := r.indexes[i]; ok {
-		return x, nil
-	}
-	client, err := r.httpClient()
-	if err != nil {
-		return nil, err
-	}
-	x, err := index.Open(r.ctx, client, r.opts.Indexes[i])
-	if err != nil {
-		return nil, fmt.Errorf("index %s: %v", r.opts.Indexes[i], err)
-	}
-	if r.indexes == nil {
-		r.indexes = map[int]*index.Index{}
-	}
-	r.indexes[i] = x
-	return x, nil
-}
-
-func (r *resolver) resolveIndex(o *origin.Origin, req request) (*lock.Entry, error) {
-	id := o.Identity()
-	old := r.locked(id, req.constraint)
-	if e, ok, err := r.reuseLocked(old); ok || err != nil {
-		return e, err
-	}
-	if len(r.opts.Indexes) == 0 {
-		return nil, fmt.Errorf("%s: usage %q: no sysand index configured (set SYSPI_INDEX or SYSAND_INDEX, or pass -index)", req.requester, req.resource)
-	}
-	if r.opts.Offline {
-		return nil, fmt.Errorf("%s: usage %q: offline and not installed", req.requester, req.resource)
-	}
-	dir, err := index.ProjectPath(o.Publisher, o.Name)
-	if err != nil {
-		return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
-	}
-	var want *index.VersionEntry
-	var from *index.Index
-	for i := range r.opts.Indexes {
-		x, err := r.openIndex(i)
-		if err != nil {
-			return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
-		}
-		vs, err := x.ReadVersions(r.ctx, o.Publisher, o.Name)
-		if errors.Is(err, index.ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
-		}
-		from = x
-		if old != nil {
-			e, err := vs.Lookup(old.Version)
-			if err != nil {
-				return nil, fmt.Errorf("%s: usage %q: %s: %v (versions.json at `%s`)", req.requester, req.resource, id, err, x.Source(dir+"/versions.json"))
-			}
-			if e.KparDigest != "sha256:"+old.SHA256 {
-				return nil, fmt.Errorf("%s: usage %q: %s %s: the index now advertises %s but the lock records sha256:%s", req.requester, req.resource, id, old.Version, e.KparDigest, old.SHA256)
-			}
-			want = e
-			break
-		}
-		var avail []string
-		for _, e := range vs.Available() {
-			v, _ := version.Parse(e.Version)
-			avail = append(avail, e.Version)
-			if want == nil && req.constraint.Check(v) {
-				want = &e
-			}
-		}
-		if want == nil {
-			return nil, fmt.Errorf("%s: usage %q: no version satisfies %s; available in %s: %s", req.requester, req.resource, req.constraint, x.Location, strings.Join(avail, ", "))
-		}
-		break
-	}
-	if from == nil {
-		return nil, fmt.Errorf("%s: usage %q: %s is not in the index %s", req.requester, req.resource, id, strings.Join(r.opts.Indexes, ", "))
-	}
-	tmp, err := os.MkdirTemp("", "syspi-idx-*")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(tmp)
-	file := filepath.Join(tmp, "project.kpar")
-	rel := dir + "/" + want.Version + "/project.kpar"
-	data, err := from.Fetch(r.ctx, rel, project.MaxArchiveSize)
-	if err != nil {
-		return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
-	}
-	if err := os.WriteFile(file, data, 0o644); err != nil {
-		return nil, err
-	}
-	a, err := project.OpenArchive(file)
-	if err != nil {
-		return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
-	}
-	defer a.Close()
-	if "sha256:"+a.SHA256 != want.KparDigest {
-		return nil, fmt.Errorf("%s: usage %q: %s %s: archive SHA-256 %s does not match the recorded %s", req.requester, req.resource, id, want.Version, a.SHA256, strings.TrimPrefix(want.KparDigest, "sha256:"))
-	}
-	if a.Project.Version != want.Version {
-		return nil, fmt.Errorf("%s: usage %q: index lists %s but the archive's .project.json says %s", req.requester, req.resource, want.Version, a.Project.Version)
-	}
-	if !strings.EqualFold(a.Project.Publisher, o.Publisher) || !strings.EqualFold(a.Project.Name, o.Name) {
-		return nil, fmt.Errorf("%s: usage %q: the index served %s/%s, not %s/%s", req.requester, req.resource, a.Project.Publisher, a.Project.Name, o.Publisher, o.Name)
-	}
-	e := &lock.Entry{Resource: id, Kind: lock.KindArchive, Publisher: a.Project.Publisher, Name: a.Project.Name, Version: a.Project.Version, Source: from.Source(rel), SHA256: a.SHA256}
-	return e, r.installArchive(e, a, file)
-}
-
 // treePath is where a VCS package is installed.
 func treePath(libDir string, p *project.Project) string {
 	return filepath.Join(libDir, p.InstallName())
@@ -651,38 +574,9 @@ func installedTreeMatches(dir string, old *lock.Entry) bool {
 	return err == nil && d == old.SHA256
 }
 
-// sysandInstalled looks in .sysand/lib, which a sysand user already has
-// (read, never written), for a tree of the locked package whose digest is
-// the locked one; a copy with another digest is reported and not trusted.
-func (r *resolver) sysandInstalled(old *lock.Entry) string {
-	dir := filepath.Join(r.opts.Root, filepath.FromSlash(project.SysandLibDir))
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return ""
-	}
-	for _, ent := range entries {
-		if !ent.IsDir() {
-			continue
-		}
-		p := filepath.Join(dir, ent.Name())
-		pr, err := project.ReadProject(p)
-		if err != nil || pr.Name != old.Name || pr.Version != old.Version || (old.Publisher != "" && pr.Publisher != "" && pr.Publisher != old.Publisher) {
-			continue
-		}
-		if installedTreeMatches(p, old) {
-			return p
-		}
-		if d, err := digest.TreeExcept(p, project.MetaFile); err == nil && d == old.SHA256 {
-			return p
-		}
-		r.logf("%s %s at %s does not have the locked tree SHA-256 %s; installing under %s instead", old.Name, old.Version, rel(r.opts.Root, p), old.SHA256, project.LibDir)
-	}
-	return ""
-}
-
 func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error) {
 	id := o.Identity()
-	old := r.locked(id, req.constraint)
+	old := r.lockedRepository(o, req.constraint)
 	if old != nil && !r.opts.LockOnly {
 		stem := (&project.Project{Name: old.Name, Publisher: old.Publisher, Version: old.Version}).InstallName()
 		dst := filepath.Join(r.libDir, stem)
@@ -691,21 +585,14 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 				return nil, err
 			}
 			e := *old
-			e.Usage = nil
-			r.res.Reused = append(r.res.Reused, id)
-			return &e, r.requeueLocked(&e, old)
-		}
-		if p := r.sysandInstalled(old); p != "" {
-			r.logf("%s %s already installed by sysand at %s", old.Name, old.Version, rel(r.opts.Root, p))
-			e := *old
-			e.Usage = nil
+			e.Resource, e.Source, e.Usage = id, o.Source, nil
 			r.res.Reused = append(r.res.Reused, id)
 			return &e, r.requeueLocked(&e, old)
 		}
 	}
 	if old != nil && r.opts.LockOnly {
 		e := *old
-		e.Usage = nil
+		e.Resource, e.Source, e.Usage = id, o.Source, nil
 		return &e, r.requeueLocked(&e, old)
 	}
 	if r.opts.Offline {

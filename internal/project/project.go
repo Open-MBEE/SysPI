@@ -29,8 +29,6 @@ const (
 	ArchiveExt = ".kpar"
 	// LibDir is where packages are installed, beside the consuming .project.json.
 	LibDir = "lib"
-	// SysandLibDir is sysand's install directory, read but never written.
-	SysandLibDir = ".sysand/lib"
 )
 
 // Usage is one entry of .project.json's usage list.
@@ -40,7 +38,7 @@ type Usage struct {
 }
 
 // Project is an InterchangeProject. Publisher is not in Table 12; it is the
-// convention sysand and OpenSysML share for the install directory name.
+// convention OpenSysML reads for the install directory name.
 type Project struct {
 	Name        string   `json:"name"`
 	Publisher   string   `json:"publisher,omitempty"`

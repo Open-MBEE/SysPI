@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/Open-MBEE/SysPI/internal/digest"
-	"github.com/Open-MBEE/SysPI/internal/index"
 	"github.com/Open-MBEE/SysPI/internal/lock"
+	"github.com/Open-MBEE/SysPI/internal/origin"
 	"github.com/Open-MBEE/SysPI/internal/project"
 )
 
@@ -59,7 +59,7 @@ func fixture(t *testing.T) (widgets, base string) {
 	git(t, w, "add", "-A")
 	git(t, w, "commit", "-q", "-m", "1.0.0")
 	git(t, w, "tag", "v1.0.0")
-	write(t, w, ".project.json", `{"name":"widgets","publisher":"acme","version":"1.1.0","usage":[{"resource":"pkg:git/`+"/"+filepath.ToSlash(filepath.Join(root, "base.git"))+`","versionConstraint":"^2.1.0"}]}`+"\n")
+	write(t, w, ".project.json", `{"name":"widgets","publisher":"acme","version":"1.1.0","usage":[{"resource":"git+file://`+filepath.ToSlash(filepath.Join(root, "base.git"))+`","versionConstraint":"^2.1.0"}]}`+"\n")
 	write(t, w, "packages/gears/.project.json", `{"name":"gears","publisher":"acme","version":"1.1.0"}`+"\n")
 	m, err := project.GenerateMeta(w, time.Unix(0, 0))
 	if err != nil {
@@ -112,6 +112,16 @@ func consumer(t *testing.T, usages ...project.Usage) string {
 	return dir
 }
 
+// ident is the lock resource (canonical, version-free identity) of a resource.
+func ident(t *testing.T, res string) string {
+	t.Helper()
+	o, err := origin.Parse(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o.Identity()
+}
+
 func run(t *testing.T, dir string, opts Options) (*Result, string) {
 	t.Helper()
 	var log bytes.Buffer
@@ -138,7 +148,7 @@ func runErr(t *testing.T, dir string, opts Options, want string) {
 
 func TestGitInstallLockAndOffline(t *testing.T) {
 	widgets, _ := fixture(t)
-	wres := "pkg:git/" + filepath.ToSlash(widgets)
+	wres := "git+file://" + filepath.ToSlash(widgets)
 	dir := consumer(t,
 		project.Usage{Resource: wres + "@1.0.0"},
 		project.Usage{Resource: wres + "#packages/gears", VersionConstraint: "~1.1.0"},
@@ -163,11 +173,11 @@ func TestGitInstallLockAndOffline(t *testing.T) {
 	if len(lk.Packages) != 3 {
 		t.Fatalf("lock has %d packages", len(lk.Packages))
 	}
-	w := lk.Find(wres)
+	w := lk.Find(ident(t, wres))
 	if w == nil || w.Kind != lock.KindVCS || w.VCS != "git" || w.Tag != "v1.0.0" || len(w.Revision) != 40 || w.SHA256 == "" || !w.MetaGenerated || w.Publisher != "acme" {
 		t.Fatalf("widgets entry %+v", w)
 	}
-	g := lk.Find(wres + "#packages/gears")
+	g := lk.Find(ident(t, wres+"#packages/gears"))
 	if g == nil || g.Version != "1.1.0" || g.Tag != "v1.1.0" || g.Revision == w.Revision {
 		t.Fatalf("gears entry %+v", g)
 	}
@@ -209,6 +219,21 @@ func TestGitInstallLockAndOffline(t *testing.T) {
 		t.Fatalf("re-resolved lock differs:\n%s\n%s", first, third)
 	}
 
+	// A lock whose resources carry an older, non-canonical spelling still
+	// matches the installed trees offline.
+	legacy := strings.ReplaceAll(string(first), `"`+ident(t, wres)+`"`, `"`+wres+`"`)
+	if legacy == string(first) {
+		t.Fatal("lock did not contain the canonical widgets identity")
+	}
+	write(t, dir, project.LockFile, legacy)
+	res5, log5 := run(t, dir, Options{Offline: true})
+	if len(res5.Reused) != 2 || !res5.LockWritten {
+		t.Fatalf("legacy lock run %+v\n%s", res5, log5)
+	}
+	if again, _ := os.ReadFile(filepath.Join(dir, project.LockFile)); !bytes.Equal(again, first) {
+		t.Fatalf("legacy lock not rewritten canonically:\n%s", again)
+	}
+
 	// Offline with the repository gone: still satisfied.
 	os.RemoveAll(widgets)
 	res4, _ := run(t, dir, Options{})
@@ -219,16 +244,124 @@ func TestGitInstallLockAndOffline(t *testing.T) {
 	fresh3 := t.TempDir()
 	write(t, fresh3, project.ProjectFile, string(pj))
 	write(t, fresh3, project.LockFile, string(first))
-	runErr(t, fresh3, Options{Offline: true}, "offline and pkg:git//")
+	runErr(t, fresh3, Options{Offline: true}, "offline and pkg:generic/")
 	// A tampered installed tree is reinstalled from the lock... which needs the repository.
 	write(t, dir, "lib/acme-widgets_1.0.0/Widgets.sysml", "tampered")
 	runErr(t, dir, Options{}, "usage")
 }
 
+func TestKeyResources(t *testing.T) {
+	l := lock.New()
+	l.Put(lock.Entry{Resource: "pkg:git/example.org/team/widgets", Kind: lock.KindVCS})
+	l.Put(lock.Entry{Resource: "git+ssh://example.org/team/gears.git#packages/gears", Kind: lock.KindVCS})
+	l.Put(lock.Entry{Resource: "https://example.org/dist/tools_1.0.0.kpar", Kind: lock.KindArchive})
+	l.Put(lock.Entry{Resource: "pkg:generic/rover?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Frover.git", Kind: lock.KindVCS})
+	keyResources(l)
+	want := []string{
+		"pkg:generic/widgets?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Fwidgets",
+		"pkg:generic/gears?vcs_url=git%2Bssh:%2F%2Fexample.org%2Fteam%2Fgears%23packages%2Fgears",
+		"https://example.org/dist/tools_1.0.0.kpar",
+		"pkg:generic/rover?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Frover",
+	}
+	for i, w := range want {
+		if l.Packages[i].Resource != w {
+			t.Errorf("entry %d = %s, want %s", i, l.Packages[i].Resource, w)
+		}
+	}
+}
+
+// A lock written in any spelling of the repository, with or without .git,
+// matches a usage in any spelling of the same location, and the installed
+// tree is reused offline; a usage naming the other location (repo for
+// repo.git) is a different repository and is not served from that tree.
+func TestLockMatchesAcrossGitSuffixSpellings(t *testing.T) {
+	widgets, _ := fixture(t)
+	withGit := "git+file://" + filepath.ToSlash(widgets)
+	if !strings.HasSuffix(withGit, ".git") {
+		t.Fatalf("fixture %s is not a .git location", withGit)
+	}
+	without := strings.TrimSuffix(withGit, ".git")
+	spellings := []struct {
+		name, res string
+		same      bool // names the installed location rather than its .git-less sibling
+	}{
+		{"bare .git", withGit, true},
+		{"bare", without, false},
+		{"canonical .git", ident(t, withGit), true},
+		{"canonical", ident(t, without), false},
+	}
+	usage := func(res string) project.Usage { return project.Usage{Resource: res, VersionConstraint: "1.0.0"} }
+	dir := consumer(t, usage(withGit))
+	if res, log := run(t, dir, Options{}); len(res.Installed) != 1 {
+		t.Fatalf("install %+v\n%s", res, log)
+	}
+	first, _ := os.ReadFile(filepath.Join(dir, project.LockFile))
+	// An older lock recorded the source in its input spelling; it is still the same location.
+	oldSrc := strings.ReplaceAll(string(first), `"source": "`+strings.ReplaceAll(filepath.FromSlash(widgets), `\\`, `\\\\`)+`"`, `"source": "git+file://`+filepath.ToSlash(widgets)+`"`)
+	if oldSrc == string(first) {
+		t.Fatalf("lock did not contain the widgets source:\n%s", first)
+	}
+	write(t, dir, project.LockFile, oldSrc)
+	if res, log := run(t, dir, Options{Offline: true}); len(res.Reused) != 1 {
+		t.Fatalf("older source spelling %+v\n%s", res, log)
+	}
+	if again, _ := os.ReadFile(filepath.Join(dir, project.LockFile)); !bytes.Equal(again, first) {
+		t.Fatalf("older source not rewritten:\n%s", again)
+	}
+	for _, lk := range spellings {
+		for _, us := range spellings {
+			p := &project.Project{Name: "app", Publisher: "test", Version: "0.1.0", Usage: []project.Usage{usage(us.res)}}
+			if err := p.Write(dir); err != nil {
+				t.Fatal(err)
+			}
+			write(t, dir, project.LockFile, strings.ReplaceAll(string(first), `"`+ident(t, withGit)+`"`, `"`+lk.res+`"`))
+			if !us.same {
+				runErr(t, dir, Options{Offline: true}, "offline and "+ident(t, us.res)+" is not installed")
+				continue
+			}
+			res, log := run(t, dir, Options{Offline: true})
+			if len(res.Reused) != 1 || len(res.Installed) != 0 {
+				t.Fatalf("lock %s, usage %s: %+v\n%s", lk.name, us.name, res, log)
+			}
+			got, ok, err := lock.Read(dir, project.LockFile)
+			if err != nil || !ok {
+				t.Fatalf("lock after offline run: ok=%v err=%v", ok, err)
+			}
+			if e := got.Find(ident(t, us.res)); e == nil || e.Revision == "" || e.SHA256 == "" {
+				t.Fatalf("lock %s, usage %s: written lock lacks the usage identity %s:\n%s", lk.name, us.name, ident(t, us.res), got.Marshal())
+			}
+		}
+	}
+}
+
+func TestLocationKey(t *testing.T) {
+	same := [][2]string{
+		{"git+ssh://Example.org/team/repo.git", "ssh://example.org/team/repo.git"},
+		{"git+https://example.org/team/repo", "https://example.org/team/repo"},
+		{"git+file:///srv/repo.git", filepath.FromSlash("/srv/repo.git")},
+		{"svn+file:///srv/repo", "file:///srv/repo"},
+	}
+	for _, c := range same {
+		if locationKey(c[0]) != locationKey(c[1]) {
+			t.Errorf("%s and %s should be one location", c[0], c[1])
+		}
+	}
+	differ := [][2]string{
+		{"https://example.org/team/repo", "https://example.org/team/repo.git"},
+		{"ssh://example.org/team/repo", "https://example.org/team/repo"},
+		{"https://example.org/Team/repo", "https://example.org/team/repo"},
+	}
+	for _, c := range differ {
+		if locationKey(c[0]) == locationKey(c[1]) {
+			t.Errorf("%s and %s should be two locations", c[0], c[1])
+		}
+	}
+}
+
 func TestRefusals(t *testing.T) {
 	widgets, base := fixture(t)
-	wres := "pkg:git/" + filepath.ToSlash(widgets)
-	bres := "pkg:git/" + filepath.ToSlash(base)
+	wres := "git+file://" + filepath.ToSlash(widgets)
+	bres := "git+file://" + filepath.ToSlash(base)
 	cases := []struct {
 		name  string
 		usage project.Usage
@@ -238,8 +371,8 @@ func TestRefusals(t *testing.T) {
 		{"tag/version mismatch", project.Usage{Resource: wres + "@1.2.0"}, `carries version 1.2.0 but its .project.json says "version": "1.1.0"`},
 		{"no matching version", project.Usage{Resource: wres, VersionConstraint: "^5.0.0"}, "no version satisfies \"^5.0.0\"; available: v1.0.0, v1.1.0, v1.2.0, v1.3.0+build.1"},
 		{"build metadata mismatch", project.Usage{Resource: wres, VersionConstraint: "~1.3.0"}, `carries version 1.3.0+build.1 but its .project.json says "version": "1.3.0+build.2"`},
-		{"provider type", project.Usage{Resource: "pkg:github/acme/widgets@1.0.0"}, "write pkg:git/<host>/<path>"},
-		{"unsupported vcs", project.Usage{Resource: "pkg:cvs/host/repo@1.0.0"}, "not supported; supported: git, svn, hg"},
+		{"provider type", project.Usage{Resource: "pkg:github/acme/widgets@1.0.0"}, "write pkg:git/github.com/acme/widgets"},
+		{"unsupported vcs", project.Usage{Resource: "pkg:cvs/host/repo@1.0.0"}, "pkg:cvs is not supported"},
 		{"missing subpath", project.Usage{Resource: wres + "@1.0.0#nope"}, "has no directory nope"},
 		{"unknown host", project.Usage{Resource: "pkg:git/nonexistent.invalid/acme/widgets@1.0.0"}, "git ls-remote"},
 	}
@@ -262,19 +395,19 @@ func TestRefusals(t *testing.T) {
 
 func TestTransitiveAndConflict(t *testing.T) {
 	widgets, base := fixture(t)
-	wres := "pkg:git/" + filepath.ToSlash(widgets)
-	bres := "pkg:git/" + filepath.ToSlash(base)
+	wres := "git+file://" + filepath.ToSlash(widgets)
+	bres := "git+file://" + filepath.ToSlash(base)
 	dir := consumer(t, project.Usage{Resource: wres, VersionConstraint: "~1.1.0"})
 	res, _ := run(t, dir, Options{})
 	if len(res.Installed) != 2 {
 		t.Fatalf("closure not installed: %+v", res)
 	}
 	lk, _, _ := lock.Read(dir, project.LockFile)
-	w := lk.Find(wres)
-	if w.MetaGenerated || len(w.Usage) != 1 || w.Usage[0].Resource != "pkg:git//"+filepath.ToSlash(base) || w.Usage[0].VersionConstraint != "^2.1.0" {
+	w := lk.Find(ident(t, wres))
+	if w.MetaGenerated || len(w.Usage) != 1 || w.Usage[0].Resource != "git+file://"+filepath.ToSlash(base) || w.Usage[0].VersionConstraint != "^2.1.0" {
 		t.Fatalf("widgets entry %+v", w)
 	}
-	if b := lk.Find(bres); b == nil || b.Version != "2.1.0" || b.Tag != "2.1.0" {
+	if b := lk.Find(ident(t, bres)); b == nil || b.Version != "2.1.0" || b.Tag != "2.1.0" {
 		t.Fatalf("base entry %+v", b)
 	}
 	// Compatible constraints agree on 2.1.0; an exact 2.0.0 conflicts with widgets' ^2.1.0.
@@ -304,7 +437,7 @@ func TestTransitiveAndConflict(t *testing.T) {
 	git(t, twin, "add", "-A")
 	git(t, twin, "commit", "-q", "-m", "2.1.0")
 	git(t, twin, "tag", "2.1.0")
-	runErr(t, consumer(t, project.Usage{Resource: bres + "@2.1.0"}, project.Usage{Resource: "pkg:git/" + filepath.ToSlash(twin) + "@2.1.0"}), Options{}, "both install as lib/base_2.1.0 with different contents")
+	runErr(t, consumer(t, project.Usage{Resource: bres + "@2.1.0"}, project.Usage{Resource: "git+file://" + filepath.ToSlash(twin) + "@2.1.0"}), Options{}, "both install as lib/base_2.1.0 with different contents")
 	// LockOnly writes the lock and installs nothing.
 	dir4 := consumer(t, project.Usage{Resource: wres + "@1.1.0"})
 	res4, _ := run(t, dir4, Options{LockOnly: true})
@@ -317,7 +450,7 @@ func TestTransitiveAndConflict(t *testing.T) {
 	}
 }
 
-func TestArchivesLocalDirAndIndex(t *testing.T) {
+func TestArchivesAndLocalDir(t *testing.T) {
 	pkg := t.TempDir()
 	write(t, pkg, ".project.json", `{"name":"tools","publisher":"acme","version":"3.1.0","usage":[{"resource":"https://www.omg.org/spec/SysML/20250201/Systems-Library.kpar"}]}`)
 	write(t, pkg, "Tools.sysml", "package Tools;\n")
@@ -328,21 +461,16 @@ func TestArchivesLocalDirAndIndex(t *testing.T) {
 	sum, _ := digest.File(kpar)
 	srv := httptest.NewServer(http.FileServer(http.Dir(filepath.Dir(kpar))))
 	defer srv.Close()
-	idx := t.TempDir()
-	if _, err := index.Emit(idx, []string{kpar}, func(string) time.Time { return time.Unix(0, 0) }); err != nil {
-		t.Fatal(err)
-	}
 	editable := t.TempDir()
 	write(t, editable, ".project.json", `{"name":"dev","version":"0.0.1"}`)
 
 	dir := consumer(t,
 		project.Usage{Resource: kpar},
 		project.Usage{Resource: srv.URL + "/acme-tools_3.1.0.kpar"},
-		project.Usage{Resource: "pkg:sysand/acme/tools", VersionConstraint: "^3.0.0"},
 		project.Usage{Resource: editable},
 	)
-	res, _ := run(t, dir, Options{Indexes: []string{idx}})
-	if len(res.Installed) != 1 || len(res.Reused) != 2 || len(res.Skipped) != 2 {
+	res, _ := run(t, dir, Options{})
+	if len(res.Installed) != 1 || len(res.Reused) != 1 || len(res.Skipped) != 2 {
 		t.Fatalf("result %+v", res)
 	}
 	if d, _ := digest.File(filepath.Join(dir, "lib", "acme-tools_3.1.0.kpar")); d != sum {
@@ -352,9 +480,6 @@ func TestArchivesLocalDirAndIndex(t *testing.T) {
 	if e := lk.Find(srv.URL + "/acme-tools_3.1.0.kpar"); e == nil || e.Kind != lock.KindArchive || e.SHA256 != sum || e.Usage[0].Resource != "https://www.omg.org/spec/SysML/20250201/Systems-Library.kpar" {
 		t.Fatalf("remote entry %+v", e)
 	}
-	if e := lk.Find("pkg:sysand/acme/tools"); e == nil || e.Version != "3.1.0" || !strings.HasSuffix(e.Source, "/acme/tools/3.1.0/project.kpar") {
-		t.Fatalf("index entry %+v", e)
-	}
 	if e := lk.Find(editable); e == nil || e.Kind != lock.KindLocal || e.Name != "dev" {
 		t.Fatalf("local entry %+v", e)
 	}
@@ -362,36 +487,12 @@ func TestArchivesLocalDirAndIndex(t *testing.T) {
 	srv.Close()
 	os.Rename(kpar, kpar+".moved")
 	res2, _ := run(t, dir, Options{Offline: true})
-	if len(res2.Reused) != 3 {
+	if len(res2.Reused) != 2 {
 		t.Fatalf("offline %+v", res2)
 	}
 	os.Rename(kpar+".moved", kpar)
 	// Two usages of one editable directory with incompatible constraints conflict.
 	runErr(t, consumer(t, project.Usage{Resource: editable}, project.Usage{Resource: editable, VersionConstraint: "^1.0.0"}), Options{}, "already resolved to 0.0.1")
-	// An index entry must serve the package it names.
-	wrong := t.TempDir()
-	write(t, wrong, ".project.json", `{"name":"gears","publisher":"acme","version":"3.1.0"}`)
-	write(t, wrong, "Gears.sysml", "package Gears;\n")
-	wrongKpar := filepath.Join(t.TempDir(), "w.kpar")
-	project.Bundle(wrong, wrongKpar, time.Unix(0, 0))
-	wdata, _ := os.ReadFile(wrongKpar)
-	os.WriteFile(filepath.Join(idx, "acme", "tools", "3.1.0", "project.kpar"), wdata, 0o644)
-	wsum, _ := digest.File(wrongKpar)
-	vj, _ := os.ReadFile(filepath.Join(idx, "acme", "tools", "versions.json"))
-	os.WriteFile(filepath.Join(idx, "acme", "tools", "versions.json"), []byte(strings.Replace(string(vj), "sha256:"+sum, "sha256:"+wsum, 1)), 0o644)
-	runErr(t, consumer(t, project.Usage{Resource: "pkg:sysand/acme/tools"}), Options{Indexes: []string{idx}}, "served acme/gears, not acme/tools")
-	// Checksum mismatch inside an archive is refused.
-	bad := consumer(t, project.Usage{Resource: tamper(t, kpar)})
-	runErr(t, bad, Options{}, "checksum mismatch")
-	// A changed local archive against a lock is refused once the installed copy is gone
-	// (while it is present and has the locked digest, the lock wins and the source is not read).
-	write(t, pkg, "Tools.sysml", "package Tools { part def T; }\n")
-	project.Bundle(pkg, kpar, time.Unix(0, 0))
-	os.Remove(filepath.Join(dir, "lib", "acme-tools_3.1.0.kpar"))
-	runErr(t, dir, Options{}, "does not match the lock")
-	// pkg:sysand without an index.
-	runErr(t, consumer(t, project.Usage{Resource: "pkg:sysand/acme/tools"}), Options{}, "no sysand index configured")
-	runErr(t, consumer(t, project.Usage{Resource: "pkg:sysand/acme/other"}), Options{Indexes: []string{idx}}, "is not in the index")
 }
 
 // tamper copies an archive and flips a byte of a member's content by
@@ -435,15 +536,13 @@ func treeList(t *testing.T, dir string) []string {
 
 func TestOfflineNeverReadsHTTPCredentials(t *testing.T) {
 	widgets, _ := fixture(t)
-	dir := consumer(t, project.Usage{Resource: "pkg:git/" + widgets + "@1.0.0"})
+	dir := consumer(t, project.Usage{Resource: "git+file://" + widgets + "@1.0.0"})
 	run(t, dir, Options{})
-	t.Setenv("SYSAND_CRED_X_BEARER_TOKEN", "t") // malformed: no SYSAND_CRED_X pattern
 	t.Setenv("NETRC", filepath.Join(t.TempDir(), "missing"))
 	res, _ := run(t, dir, Options{Offline: true})
 	if len(res.Reused) != 1 {
 		t.Fatalf("%+v", res)
 	}
-	runErr(t, consumer(t, project.Usage{Resource: "https://idx.example/x.kpar"}), Options{}, "please specify URL pattern SYSAND_CRED_X")
 }
 
 func TestPublishRollsBackWhenTheLockCannotBeWritten(t *testing.T) {
@@ -451,12 +550,12 @@ func TestPublishRollsBackWhenTheLockCannotBeWritten(t *testing.T) {
 		t.Skip("root ignores directory permissions")
 	}
 	widgets, _ := fixture(t)
-	dir := consumer(t, project.Usage{Resource: "pkg:git/" + widgets + "@1.0.0"})
+	dir := consumer(t, project.Usage{Resource: "git+file://" + widgets + "@1.0.0"})
 	run(t, dir, Options{})
 	before, _ := os.ReadFile(filepath.Join(dir, project.LockFile))
 	// Move to 1.1.0 (replaces the installed tree) with the project directory read-only,
 	// so the lock cannot be written after lib/ was updated.
-	write(t, dir, project.ProjectFile, `{"name":"app","version":"0.1.0","usage":[{"resource":"pkg:git/`+widgets+`@1.1.0"}]}`)
+	write(t, dir, project.ProjectFile, `{"name":"app","version":"0.1.0","usage":[{"resource":"git+file://`+widgets+`@1.1.0"}]}`)
 	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Fatal(err)
 	}

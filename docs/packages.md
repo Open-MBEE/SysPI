@@ -2,38 +2,50 @@
 
 ## Identity grammar
 
+A repository package is identified by an ECMA-427 Package-URL (Clause 5: VCS URLs are not purl
+types and go in a qualifier) of type `generic` carrying the Annex B.3.5 `vcs_url` qualifier:
+
 ```
-resource   = "pkg:" vcs "/" host "/" path [ "@" version ] [ "#" subpath ]
+resource   = "pkg:generic/" name "?vcs_url=" encode(vcs_url)
+vcs_url    = vcs "+" transport "://" host "/" path [ "@" version ] [ "#" subpath ]
 vcs        = "git" | "svn" | "hg"
-host       = DNS name (lower-cased), or empty for a repository on this machine
-path       = repository path on the host, without a leading "/" and without ".git"
-version    = semantic version (MAJOR.MINOR.PATCH[-pre][+build]); an exact constraint
+transport  = git: "git" | "https" | "http" | "ssh"      (Annex B.3.5; "git" and "git+git" are one)
+             hg:  "http" | "https" | "static-http" | "ssh"
+             svn: "svn" | "http" | "https" | "ssh"      ("svn" and "svn+svn" are one)
+             any: "file"   (a repository on this machine, pip's notation; host empty, path absolute)
+name       = last segment of path, a ".git" suffix stripped
+host       = DNS name (lower-cased), with an optional port
+path       = repository path on the host as written (a ".git" suffix stays), without a leading "/"
+version    = semantic version (MAJOR.MINOR.PATCH[-pre][+build]) naming a tag; an exact constraint
 subpath    = directory within the tagged tree that is the project directory
 ```
 
-Examples: `pkg:git/github.com/MBSE4U/sysmod-sysmlv2@5.1.5`,
-`pkg:hg/hg.example.org/models/rover#packages/power`, `pkg:svn/svn.example.org/repos/rover@1.0.0`,
-`pkg:git//srv/git/rover.git@1.0.0` (empty host: a local repository).
+`encode` is the purl canonical percent-encoding: every byte outside `A-Z a-z 0-9 - . _ ~` and
+`:` becomes `%XX` (`+` → `%2B`, `/` → `%2F`, `@` → `%40`, `#` → `%23`); any valid
+percent-encoding is accepted on input. Examples:
 
-Plain clone addresses are normalised to the identity: `https://host/path[.git]`,
-`ssh://[user@]host[:port]/path`, `user@host:path` (scp style), `git://`, `svn://`, `svn+ssh://`
-and `file:///path`, each with an optional `@<version>` and `#<subpath>`. The canonical identity
-(`pkg:<vcs>/<host>/<path>[#<subpath>]`) is what the lock records as `resource`; the address the
-user wrote is kept as `source`, so an SSH remote stays SSH.
+- `pkg:generic/OpenSysML-Extensions-Library?vcs_url=git%2Bhttps:%2F%2Fgithub.com%2FOpen-MBEE%2FOpenSysML-Extensions-Library%401.0.0`
+- `pkg:generic/rover?vcs_url=hg%2Bhttps:%2F%2Fhg.example.org%2Fmodels%2Frover%23packages%2Fpower`
+- `pkg:generic/rover?vcs_url=svn%2Bsvn:%2F%2Fsvn.example.org%2Frepos%2Frover%401.0.0`
+- `pkg:generic/rover?vcs_url=git%2Bfile:%2F%2F%2Fsrv%2Fgit%2Frover.git%401.0.0`
 
-Refused: `pkg:github/…`, `pkg:gitlab/…` and other provider vocabularies (the host is part of the
-identity; write `pkg:git/github.com/…`); `pkg:cvs/…` and any other version-control system
-("not supported; supported: git, svn, hg"); `@latest` or any non-semver version.
+Two input spellings normalise to it (and `syspi add` writes the canonical form into
+`.project.json`): `pkg:git/<host>/<path>[@<version>][#<subpath>]`, meaning `git+https`; and the
+bare vcs_url notation `git+https://…`, `git+ssh://…`, `git://…`, `hg+https://…`,
+`hg+static-http://…`, `svn://…`, `svn+https://…`, `svn+ssh://…`, `<vcs>+file:///…`, each with an
+optional `@<version>` and `#<subpath>`. The version-free identity (`vcs_url` without `@<version>`)
+is what the lock records as `resource`; what the VCS executable is given is kept as `source`
+(`git+ssh` stays SSH; the path is cloned exactly as written, so `…/repo` and `…/repo.git` are
+two locations and the one your server serves is the one to write).
 
-`pkg:git` is the registered Package-URL type `git` (ECMA-427; purl-spec
-`types/git-definition.json`): namespace = the git host, name = the repository path with owner,
-version = a git reference, subpath allowed. SysPI restricts the version to a tag naming a semantic
-version (`v<semver>` or `<semver>`); a commit id such as
-`pkg:git/cygwin.com/cgit/newlib-cygwin@6d049c54…` is refused with an error saying exactly that,
-while the other official examples (`pkg:git/projects.blender.org/blender/blender.git`,
-`pkg:git/gitlab.gnome.org/GNOME/adwaita-fonts`) parse unchanged. `pkg:svn`, `pkg:hg` and
-`pkg:sysand` are not registered purl types and use the same shape by analogy. SysPI hand-parses
-all of them and does not use a purl library.
+Refused, each with a message naming the three accepted spellings: `pkg:svn/…` and `pkg:hg/…`
+(not Package-URL types), `pkg:github/…`, `pkg:gitlab/…` and other provider vocabularies (the
+host is part of the location), plain clone URLs as identities (`https://host/path.git@1.0.0`,
+`ssh://…`, `git@host:path`, `file:///path@1.0.0`, `/path@1.0.0`), a user name or password in the
+host (Annex B.3.5), a transport outside the lists above, `bzr` or any other VCS, a commit id or
+`@latest` as version. A plain `http(s)` IRI is only ever dereferenced as a project interchange
+file — a `.kpar` — as KerML 1.1 §10.3 Table 12 describes `resource`; it is never cloned, and
+`user:password@` in it is refused (credentials belong in the netrc, never in `.project.json`).
 
 ## What a package is
 
@@ -88,7 +100,7 @@ indented, keys in a fixed order:
   "lockVersion": 1,
   "packages": [
     {
-      "resource": "pkg:git/github.com/MBSE4U/sysmod-sysmlv2",
+      "resource": "pkg:generic/sysmod-sysmlv2?vcs_url=git%2Bhttps:%2F%2Fgithub.com%2FMBSE4U%2Fsysmod-sysmlv2",
       "kind": "vcs",
       "publisher": "mbse4u",
       "name": "sysmod",
@@ -99,7 +111,7 @@ indented, keys in a fixed order:
       "revision": "07286ecd2128b64f53fc3d05aee811e98b991a85",
       "sha256": "…64 hex…",
       "usage": [
-        { "resource": "git@private.example:team/core.git", "versionConstraint": "^1.0.0" }
+        { "resource": "pkg:generic/core?vcs_url=git%2Bssh:%2F%2Fprivate.example%2Fteam%2Fcore", "versionConstraint": "^1.0.0" }
       ]
     }
   ]
@@ -127,35 +139,7 @@ lib/
 ```
 
 The directory name is `<publisher>-<name>_<version>` (`<name>_<version>` without a publisher),
-the layout sysand uses under `.sysand/lib/`, which SysPI also reads — a locked package already
-present there is not installed again — but never writes.
-
-## Static index
-
-`syspi index emit -o <dir> <packages>…` writes sysand's static layout: `<dir>/index.json`
-listing `pkg:sysand/<publisher>/<name>` IRIs and, per project,
-`<publisher>/<name>/versions.json` (`version`, `usage`, `kpar_size`, `kpar_digest`, newest first)
-with `<version>/{.project.json,.meta.json,project.kpar}`.
-
-`pkg:sysand/<publisher>/<name>` resources resolve through the indexes, in order, of `-index` /
-`$SYSPI_INDEX`, then `$SYSAND_INDEX`, then `$SYSAND_DEFAULT_INDEX` (else `https://sysand.com`);
-each is a comma-separated list, an empty entry is an error (`hint: check for a stray `,``), and
-`-no-index` consults none. The first index whose `versions.json` exists for the project decides.
-
-An index location is an absolute `http(s)` URL without userinfo or fragment, a local directory,
-or a URL template holding exactly one `{path}` (the index-relative path percent-encoded as one
-segment, `/` → `%2F`, for file APIs like GitLab's) or `{path_raw}` (literal `/`). Discovery
-fetches `<location>/sysand-index-config.json` first: absent (404) means the location itself is
-the index root; present, its `index_root` (URL or template) is where the files live and
-`api_root` (plain URL) is recorded for diagnostics and unused by design — SysPI never calls it.
-Relative, non-HTTP(S) or userinfo-bearing values are errors.
-
-`versions.json` is validated as sysand validates it: every `version` a semantic version without
-build metadata, listed once, in descending precedence (`10.0.0-beta.1` before `10.0.0` is an
-error), `kpar_digest` = `sha256:<64-hex>`. Entries with `status: "yanked"` or `"removed"` are
-never newly selected; re-fetching a locked version that is now `removed` is a hard error, a
-`yanked` one still downloads (its files are served). The lock's `source` is the resolved
-`project.kpar` URL.
+the convention OpenSysML reads.
 
 ## Bundle reproducibility
 
@@ -174,22 +158,11 @@ repository host and, when an entry exists and svn is 1.14 or newer, runs
 `svn --username <login> --password-from-stdin --no-auth-cache …` with the password on stdin —
 never an argument, never in the environment, never written to `~/.subversion/auth`; an older svn
 runs as before and the hint points at the cache or `svn+ssh://`. Debian and Ubuntu build svn
-without plaintext password storage, so on CI boxes and containers the netrc is the way. Its
-own HTTP downloads (index files, `.kpar` URLs) take credentials in this order:
-
-1. sysand's environment grammar, read verbatim so a sysand user's CI variables work unchanged:
-   `SYSAND_CRED_<LABEL>` is a URL glob (`*`, `?` within one path segment, `**` across, `[...]`,
-   `{a,b}`), paired with `SYSAND_CRED_<LABEL>_BEARER_TOKEN` or with
-   `SYSAND_CRED_<LABEL>_BASIC_USER` and `SYSAND_CRED_<LABEL>_BASIC_PASS`. A group missing its
-   pattern, half of a Basic pair, both schemes or a label is an error naming the variable. A URL
-   that matches is requested without credentials first and, on any 4xx except 429 (some hosts
-   answer 404 to anonymous requests for protected files), retried with the credential; when
-   several globs match, a warning lists them and each is tried in label order until one answers
-   non-4xx, else the first credentialed response stands. On a redirect the credential is sent only
-   to a target on the same host.
-2. the netrc file (`$NETRC`, else `~/.netrc` / `%USERPROFILE%\_netrc`) as HTTP Basic, matched by
-   host and sent only to that host; a redirect elsewhere gets that host's entry or none.
-3. anonymous.
+without plaintext password storage, so on CI boxes and containers the netrc is the way. Its own
+HTTP downloads (`.kpar` URLs) take HTTP Basic from the netrc file (`$NETRC`, else `~/.netrc` /
+`%USERPROFILE%\_netrc`), matched by host and sent only to that host; a redirect elsewhere gets
+that host's own `machine` entry or none — the `default` entry never follows a redirect. URLs in
+diagnostics are shown without user info or query.
 
 Proxies come from the environment through `http.DefaultTransport`.
 
@@ -203,14 +176,10 @@ failed` → configure a credential helper or use an SSH remote; svn `E170001` / 
 netrc entry for the host (svn 1.14+), or `svn ls <url>` once interactively so svn caches the
 credentials (on builds without plaintext password storage, Debian and Ubuntu among them, the
 cache holds only the username), or `svn+ssh://`; hg `authorization failed` / `http error 401` → add an `[auth]`
-section to hgrc (`HGPLAIN=1` does not disable it); HTTP 401 / 403 → a `SYSAND_CRED_*` group
-matching the URL or a netrc entry for the host.
+section to hgrc (`HGPLAIN=1` does not disable it); HTTP 401 / 403 → a netrc entry for the host.
 
 `tests/e2e/auth_test.go` proves each path against local servers: git over dumb HTTP behind Basic
 auth with a credential helper configured through `GIT_CONFIG_*`, hg over `static-http://` with an
 `[auth]` section in `HGRCPATH`, svn against `svnserve` with `anon-access = none` and a netrc
-entry (no auth cache written, wrong password not echoed, password not in argv), and the index and `.kpar` downloads behind Basic auth with a netrc.
-`tests/e2e/sysand_test.go` proves the sysand side: a discovery document whose `index_root` is a
-second server, bearer and Basic `SYSAND_CRED_*` groups (anonymous request first), an unmatched
-glob ending in 401 with a hint naming both mechanisms, a credential dropped on a cross-host
-redirect, and `SYSAND_INDEX` / `SYSAND_DEFAULT_INDEX` picked up with no index configured.
+entry (no auth cache written, wrong password not echoed, password not in argv), and a `.kpar`
+download behind Basic auth with a netrc.

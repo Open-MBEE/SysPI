@@ -101,7 +101,7 @@ func TestProjectAndMeta(t *testing.T) {
 	if un, err := VerifyChecksums(dir, m); err != nil || len(un) != 1 || un[0] != "README.md" {
 		t.Fatalf("NONE entry = %v %v", un, err)
 	}
-	// sysand's object shape and the spec's list shape both parse.
+	// The object-shaped checksum some producers write and the spec's list shape both parse.
 	var one, list Meta
 	if err := json.Unmarshal([]byte(`{"index":{},"created":"x","checksum":{"a":{"value":"v","algorithm":"SHA256"}}}`), &one); err != nil || len(one.Checksum["a"]) != 1 {
 		t.Fatalf("object shape: %v", err)
