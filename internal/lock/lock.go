@@ -27,8 +27,8 @@ const (
 
 // Entry is one locked package.
 type Entry struct {
-	// Resource is the canonical, version-free identity (pkg:<vcs>/<host>/<path>[#<subpath>],
-	// an archive URL or path, a standard IRI).
+	// Resource is the canonical, version-free identity (pkg:generic/<name>?vcs_url=… without
+	// the %40<version>, an archive URL or path, a standard IRI).
 	Resource  string `json:"resource"`
 	Kind      string `json:"kind"`
 	Publisher string `json:"publisher,omitempty"`
