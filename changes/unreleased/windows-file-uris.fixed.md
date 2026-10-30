@@ -1,1 +1,0 @@
-- A drive letter in a `file://` resource is only a drive on Windows; on Linux and macOS `file:///C:/tools.kpar` names the directory `C:` again. The Windows spellings are documented, and the lock-rollback test runs on Windows too.
