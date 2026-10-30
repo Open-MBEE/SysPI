@@ -143,12 +143,15 @@ func TestDriveLetterFileURIs(t *testing.T) {
 		windows       bool
 		in, path, src string
 	}{
-		{true, "git+file:///C:/srv/widgets@1.0.0", "C:/srv/widgets", filepath.FromSlash("C:/srv/widgets")},
-		{true, "git+file://C:/srv/widgets@1.0.0", "C:/srv/widgets", filepath.FromSlash("C:/srv/widgets")},
+		{true, "git+file:///C:/srv/widgets@1.0.0", "C:/srv/widgets", ""},
+		{true, "git+file://C:/srv/widgets@1.0.0", "C:/srv/widgets", ""},
 		{true, "svn+file:///C:/srv/widgets@1.0.0", "C:/srv/widgets", "file:///C:/srv/widgets"},
-		{false, "git+file:///C:/srv/widgets@1.0.0", "/C:/srv/widgets", "/C:/srv/widgets"},
+		{false, "git+file:///C:/srv/widgets@1.0.0", "/C:/srv/widgets", ""},
 		{false, "svn+file:///C:/srv/widgets@1.0.0", "/C:/srv/widgets", "file:///C:/srv/widgets"},
 	} {
+		if tc.src == "" { // git: the path in this machine's separators, whichever machine is simulated
+			tc.src = filepath.FromSlash(tc.path)
+		}
 		windowsPaths = tc.windows
 		o, err := Parse(tc.in)
 		if err != nil {
