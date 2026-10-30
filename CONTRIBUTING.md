@@ -38,10 +38,20 @@ The repository follows git-flow:
 
 ## Releases
 
-A maintainer tags `vX.Y.Z` on `main`; the release workflow builds Linux, macOS and Windows
-binaries for amd64 and arm64 with a `SHA256SUMS` file and attaches them to the GitHub release.
-The `.project.json` convention for packages applies to SysPI's own releases: the tag equals the
-version.
+1. On a `release/x.y.z` branch from `develop`, run `python3 scripts/changelog.py release x.y.z`:
+   it folds `changes/unreleased/` into a dated `## x.y.z` section of `CHANGELOG.md` and deletes
+   the fragments. Open the pull request against `develop` and merge it.
+2. Merge `develop` into `main` and tag `vx.y.z` on `main`; the tag equals the version, as the
+   `.project.json` convention requires of the packages SysPI installs.
+3. The release workflow (`.github/workflows/release.yml`) runs the gate on Linux, macOS and
+   Windows, builds `syspi-<os>-<arch>.tar.gz` (`.zip` on Windows) for amd64 and arm64 with
+   `scripts/build-release-artifacts.sh`, signs `SHA256SUMS.txt` with cosign (keyless; the
+   identity is the workflow on the tag), creates the GitHub release with the changelog section
+   as its notes, then installs it on all three systems with `install.sh` / `install.ps1`.
+   A tag without a `CHANGELOG.md` section publishes nothing.
+
+`scripts/install-test.sh` runs the installers against a fake release served locally; CI runs it
+on every pull request. To rehearse a release locally: `scripts/build-release-artifacts.sh v0.0.0-rc dist`.
 
 ## Licence
 
