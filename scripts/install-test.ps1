@@ -5,7 +5,7 @@ Runs install.ps1 against a fake release served from this machine.
 .DESCRIPTION
 Called by install-test.sh with the server it started; run alone (on Windows CI) it builds
 the fake releases with build-release-artifacts.sh under Git Bash and starts the server itself.
-Needs Go, python3 and, when run alone, bash with GNU tar and zip (Git for Windows has them).
+Needs Go, python3 and, when run alone, bash (Git for Windows has it).
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '')]
 [CmdletBinding()]

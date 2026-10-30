@@ -19,16 +19,17 @@ cd "$root"
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct 2>/dev/null || date +%s)}"
 export CGO_ENABLED=0
 
-tar_cmd=tar
-command -v gtar >/dev/null 2>&1 && tar_cmd=gtar
-if ! "$tar_cmd" --version 2>/dev/null | grep -q 'GNU tar'; then
-	echo "build-release-artifacts: GNU tar is needed for reproducible archives (brew install gnu-tar)" >&2
-	exit 1
-fi
-command -v zip >/dev/null 2>&1 || { echo "build-release-artifacts: zip is needed for the Windows archives" >&2; exit 1; }
+# The archives are written by scripts/release-archive (archive/tar, archive/zip): no tar or
+# zip on the host, so the same bytes come out of Linux, macOS and Git for Windows.
+tools=$(mktemp -d)
+trap 'rm -rf "$tools"' EXIT
+archiver="$tools/release-archive$(go env GOEXE)"
+go build -o "$archiver" ./scripts/release-archive
+if command -v sha256sum >/dev/null 2>&1; then sum_cmd="sha256sum"; else sum_cmd="shasum -a 256"; fi
 
 rm -rf "$dist"
 mkdir -p "$dist"
+dist=$(cd "$dist" && pwd)
 host="$(go env GOOS)-$(go env GOARCH)"
 
 for platform in $platforms; do
@@ -50,17 +51,13 @@ for platform in $platforms; do
 		[[ $reported == "syspi $tag" ]] || { echo "build-release-artifacts: host build reports '$reported', not 'syspi $tag'" >&2; exit 1; }
 	fi
 
-	touch -d "@$SOURCE_DATE_EPOCH" "$stage/syspi$exe" "$stage/LICENSE"
-	if [[ $os == windows ]]; then
-		(cd "$stage" && TZ=UTC zip -X -q -j "../syspi-$platform.zip" "syspi$exe" LICENSE)
-	else
-		"$tar_cmd" --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$SOURCE_DATE_EPOCH" \
-			--mode='u+rwX,go+rX,go-w' -C "$stage" -cf - "syspi$exe" LICENSE | gzip -n -9 >"$dist/syspi-$platform.tar.gz"
-	fi
+	archive="syspi-$platform.tar.gz"
+	[[ $os != windows ]] || archive="syspi-$platform.zip"
+	(cd "$stage" && "$archiver" -out "../$archive" -mtime "$SOURCE_DATE_EPOCH" "syspi$exe" LICENSE)
 	rm -rf "$stage"
 	echo "built syspi-$platform"
 done
 
-(cd "$dist" && sha256sum syspi-* | LC_ALL=C sort -k2 >SHA256SUMS.txt)
+(cd "$dist" && $sum_cmd syspi-* | LC_ALL=C sort -k2 >SHA256SUMS.txt)
 echo "wrote $dist/SHA256SUMS.txt:"
 cat "$dist/SHA256SUMS.txt"

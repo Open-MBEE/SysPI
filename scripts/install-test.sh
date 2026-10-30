@@ -6,7 +6,7 @@
 #
 # The fake releases are real syspi builds (stamped with the fake tags) packaged by
 # build-release-artifacts.sh, served by install-test-server.py with GitHub's
-# /releases/latest redirect. Needs: Go, python3, GNU tar, zip, and what install.sh needs.
+# /releases/latest redirect. Needs: Go, python3 and what install.sh needs.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
