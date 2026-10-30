@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +37,9 @@ func syspiBinary(t *testing.T) string {
 			return
 		}
 		binPath = filepath.Join(dir, "syspi")
+		if runtime.GOOS == "windows" {
+			binPath += ".exe"
+		}
 		cmd := exec.Command("go", "build", "-o", binPath, "../../cmd/syspi")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			buildErr = &buildFailure{err, string(out)}

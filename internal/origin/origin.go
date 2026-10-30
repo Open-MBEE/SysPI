@@ -189,7 +189,8 @@ func Parse(resource string) (*Origin, error) {
 		return parseHTTP(res)
 	}
 	if rest, ok := strings.CutPrefix(res, "file://"); ok {
-		if i := strings.IndexByte(rest, '/'); i > 0 {
+		rest, ok = fileURIPath(rest)
+		if !ok {
 			return nil, fmt.Errorf("resource %q: file URIs must name a path on this machine (file:///path)", res)
 		}
 		return parseLocal(res, rest)
@@ -270,7 +271,8 @@ func parseGeneric(res, tail string) (*Origin, error) {
 // git+https://<host>/<path>.
 func parseGitAlias(res, tail string) (*Origin, error) {
 	if strings.HasPrefix(tail, "/") {
-		return nil, fmt.Errorf("resource %q: pkg:git needs a host; a repository on this machine is git+file:///%s", res, strings.TrimLeft(tail, "/"))
+		abs, _ := filepath.Abs(filepath.FromSlash("/" + strings.TrimLeft(tail, "/")))
+		return nil, fmt.Errorf("resource %q: pkg:git needs a host; a repository on this machine is git+file://%s", res, FileURIPath(abs))
 	}
 	if tail == "" || !strings.Contains(tail, "/") {
 		return nil, fmt.Errorf("resource %q: expected pkg:git/<host>/<path>[@<version>][#<subpath>]", res)
@@ -299,6 +301,12 @@ func parseVCSURL(res, raw string) (*Origin, error) {
 	if !transports[vcs][transport] {
 		return nil, fmt.Errorf("resource %q: %s+%s is not a vcs_url scheme for %s (ECMA-427 Annex B.3.5 allows %s)", res, vcs, transport, vcs, allowed(vcs))
 	}
+	if transport == "file" {
+		// file:///C:/path is the RFC 8089 form; file://C:/path is accepted as input.
+		if drive.MatchString(rest) {
+			rest = "/" + rest
+		}
+	}
 	u, err := url.Parse(transport + "://" + rest)
 	if err != nil {
 		return nil, fmt.Errorf("resource %q: not a valid URL: %v", res, err)
@@ -314,7 +322,11 @@ func parseVCSURL(res, raw string) (*Origin, error) {
 		if u.Host != "" || !strings.HasPrefix(u.Path, "/") {
 			return nil, fmt.Errorf("resource %q: a repository on this machine is %s+file:///absolute/path", res, vcs)
 		}
-		o.Path = filepath.ToSlash(filepath.Clean(u.Path))
+		o.Path = u.Path
+		if drive.MatchString(o.Path[1:]) {
+			o.Path = o.Path[1:]
+		}
+		o.Path = filepath.ToSlash(filepath.Clean(o.Path))
 		o.Name = strings.TrimSuffix(path.Base(o.Path), ".git")
 		switch vcs {
 		case "svn":
@@ -387,6 +399,32 @@ func parseHTTP(res string) (*Origin, error) {
 	return &Origin{Kind: kind, Source: spec, Version: ver, Resource: res}, nil
 }
 
+// drive matches the start of a Windows path, C:/ or C:\.
+var drive = regexp.MustCompile(`^[A-Za-z]:[/\\]`)
+
+// FileURIPath is the path part of a file:// URI naming abs: /C:/dir on Windows, /dir elsewhere.
+func FileURIPath(abs string) string {
+	abs = filepath.ToSlash(abs)
+	if !strings.HasPrefix(abs, "/") {
+		abs = "/" + abs
+	}
+	return abs
+}
+
+// fileURIPath turns what follows file:// into a path on this machine; a host is refused.
+func fileURIPath(rest string) (string, bool) {
+	if drive.MatchString(rest) {
+		return rest, true
+	}
+	if !strings.HasPrefix(rest, "/") {
+		return "", false
+	}
+	if drive.MatchString(rest[1:]) {
+		return rest[1:], true
+	}
+	return rest, true
+}
+
 // parseLocal handles file:// URIs and plain paths: a .kpar is a local
 // archive, anything else an editable project directory.
 func parseLocal(res, p string) (*Origin, error) {
@@ -406,7 +444,7 @@ func parseLocal(res, p string) (*Origin, error) {
 	}
 	if ver != "" {
 		abs, _ := filepath.Abs(p)
-		return nil, fmt.Errorf("resource %q: a path with @<version> is not an identity; a repository on this machine is git+file://%s@%s (or svn+file, hg+file)", res, filepath.ToSlash(abs), ver)
+		return nil, fmt.Errorf("resource %q: a path with @<version> is not an identity; a repository on this machine is git+file://%s@%s (or svn+file, hg+file)", res, FileURIPath(abs), ver)
 	}
 	if sub != "" {
 		p = path.Join(p, sub)

@@ -1,0 +1,2 @@
+# Go sources and scripts are committed with LF; a Windows checkout must not get CRLF (gofmt, sh).
+* text=auto eol=lf
