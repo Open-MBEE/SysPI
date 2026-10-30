@@ -69,7 +69,8 @@ func svnAuthArgsFor(repo string, lookup func(string) (netrc.Credential, bool), f
 	if !ok || c.Login == "" || !fromStdin {
 		return nil, nil
 	}
-	return []string{"--username", c.Login, "--password-from-stdin", "--no-auth-cache"}, strings.NewReader(c.Password + "\n")
+	// No trailing newline: svn on Windows keeps a bare LF as part of the password.
+	return []string{"--username", c.Login, "--password-from-stdin", "--no-auth-cache"}, strings.NewReader(c.Password)
 }
 
 // svn runs the user's svn with the netrc credentials for the repository

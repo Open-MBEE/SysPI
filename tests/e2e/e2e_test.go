@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +37,9 @@ func syspiBinary(t *testing.T) string {
 			return
 		}
 		binPath = filepath.Join(dir, "syspi")
+		if runtime.GOOS == "windows" {
+			binPath += ".exe"
+		}
 		cmd := exec.Command("go", "build", "-o", binPath, "../../cmd/syspi")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			buildErr = &buildFailure{err, string(out)}
@@ -145,10 +149,19 @@ func hgFixture(t *testing.T, root string) string {
 	return repo
 }
 
+// fileURL is the file:// URL of an absolute path on this machine (file:///C:/x on Windows).
+func fileURL(p string) string {
+	p = filepath.ToSlash(p)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return "file://" + p
+}
+
 func svnFixture(t *testing.T, root string) string {
 	repo := filepath.Join(root, "widgets-svn")
 	sh(t, root, "svnadmin", "create", repo)
-	url := "file://" + filepath.ToSlash(repo)
+	url := fileURL(repo)
 	stage := filepath.Join(root, "svn-stage")
 	os.MkdirAll(filepath.Join(stage, "tags"), 0o755)
 	packageTree(t, filepath.Join(stage, "trunk"), "1.0.0")
@@ -383,7 +396,7 @@ func TestRefusals(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			app := filepath.Join(root, "app-"+strings.ReplaceAll(tc.name, " ", "-"))
+			app := filepath.Join(root, "app-"+strings.NewReplacer(" ", "-", ":", "-", "/", "-").Replace(tc.name))
 			os.MkdirAll(app, 0o755)
 			sh(t, app, bin, "init", "-name", "app")
 			before, _ := os.ReadFile(filepath.Join(app, ".project.json"))
