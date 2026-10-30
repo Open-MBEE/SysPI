@@ -25,7 +25,8 @@ tools=$(mktemp -d)
 trap 'rm -rf "$tools"' EXIT
 archiver="$tools/release-archive$(go env GOEXE)"
 go build -o "$archiver" ./scripts/release-archive
-if command -v sha256sum >/dev/null 2>&1; then sum_cmd="sha256sum"; else sum_cmd="shasum -a 256"; fi
+# --text: MSYS sha256sum defaults to binary mode and would mark the names with "*".
+if command -v sha256sum >/dev/null 2>&1; then sum_cmd="sha256sum --text"; else sum_cmd="shasum -a 256"; fi
 
 rm -rf "$dist"
 mkdir -p "$dist"
@@ -59,5 +60,7 @@ for platform in $platforms; do
 done
 
 (cd "$dist" && $sum_cmd syspi-* | LC_ALL=C sort -k2 >SHA256SUMS.txt)
+[[ $(grep -Ec '^[0-9a-f]{64}  syspi-[a-z0-9]+-[a-z0-9]+\.(tar\.gz|zip)$' "$dist/SHA256SUMS.txt") -eq 6 ]] ||
+	{ echo "build-release-artifacts: SHA256SUMS.txt is not six '<sha256>  <archive>' lines" >&2; cat "$dist/SHA256SUMS.txt" >&2; exit 1; }
 echo "wrote $dist/SHA256SUMS.txt:"
 cat "$dist/SHA256SUMS.txt"
