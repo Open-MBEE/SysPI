@@ -1,2 +1,0 @@
-- The invented `pkg:svn/…` and `pkg:hg/…` identities, plain clone URLs as repository identities (`https://host/path.git@v`, `ssh://…`, `git@host:path`, `file:///path@v`, `/path@v`, `pkg:git//<local path>`): each is refused with a message naming the accepted spellings.
-- `pkg:sysand/<publisher>/<name>` resolution, the static index client (discovery document, URL templates, `-index`/`-no-index`, `SYSPI_INDEX`, `SYSAND_INDEX`, `SYSAND_DEFAULT_INDEX`, `SYSAND_CRED_*`), `syspi index emit` and the reading of `.sysand/lib/`. Remote `.kpar` downloads keep their netrc credentials.

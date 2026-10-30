@@ -1,61 +1,185 @@
 name: Release
 
+# A maintainer tags vX.Y.Z on main (CONTRIBUTING.md § Releases). The tag publishes nothing
+# until the repository gate is green on every platform the release is built for; then the
+# archives are built, their checksum manifest signed with cosign (keyless, the identity being
+# this workflow on the tag), and the GitHub release created with the CHANGELOG.md section
+# of the version as its notes. The installers are then run against the published release.
+
 on:
   push:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  SYSPI_REQUIRE_VCS: "1"
 
 jobs:
-  build:
-    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
-    runs-on: ubuntu-latest
+  gate:
+    name: Go gate (${{ matrix.os }})
     strategy:
+      fail-fast: false
       matrix:
-        goos: [linux, darwin, windows]
-        goarch: [amd64, arm64]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
           go-version-file: go.mod
+      - name: Install mercurial and subversion (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q mercurial subversion
+      - name: Install mercurial and subversion (macOS)
+        if: runner.os == 'macOS'
+        run: brew install mercurial subversion
+      - name: Install mercurial and subversion (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install -y --no-progress hg sliksvn
+          Add-Content $env:GITHUB_PATH 'C:\Program Files\Mercurial'
+          Add-Content $env:GITHUB_PATH 'C:\Program Files\SlikSvn\bin'
+      - name: Versions
+        run: go version && git --version && hg --version | head -1 && svn --version --quiet
       - name: Build
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "0"
-        run: |
-          ext=""
-          [ "$GOOS" = windows ] && ext=".exe"
-          name="syspi_${GITHUB_REF_NAME}_${GOOS}_${GOARCH}"
-          mkdir -p dist
-          go build -trimpath -ldflags "-s -w -X main.Version=${GITHUB_REF_NAME}" -o "dist/${name}${ext}" ./cmd/syspi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: syspi-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/*
-          if-no-files-found: error
-  release:
-    name: Checksums and GitHub release
-    needs: build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: Tidy
+        run: go mod tidy && git diff --exit-code go.mod go.sum
+      - name: Unit and end-to-end tests
+        run: go test -count=1 ./...
+
+  publish:
+    name: Build, sign and publish
+    needs: gate
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # create the release and upload its assets
+      id-token: write # cosign keyless signing
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
-          path: dist
-          merge-multiple: true
-      - name: Check the tag equals the version it carries
+          go-version-file: go.mod
+
+      - name: Check the tag names a version with a changelog section
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          case "$GITHUB_REF_NAME" in
-            v[0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "tag $GITHUB_REF_NAME is not v<semver>"; exit 1 ;;
-          esac
-      - name: SHA-256 checksums
-        working-directory: dist
-        run: sha256sum syspi_* > SHA256SUMS && cat SHA256SUMS
-      - name: Create the release
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::tag $TAG is not vX.Y.Z"; exit 1; }
+          python3 scripts/changelog.py release-notes "${TAG#v}" > "$RUNNER_TEMP/notes.md"
+          echo "notes for $TAG:"; cat "$RUNNER_TEMP/notes.md"
+
+      - name: Build the release archives
+        env:
+          TAG: ${{ github.ref_name }}
+        run: scripts/build-release-artifacts.sh "$TAG" dist
+
+      - name: Check the checksum manifest
+        run: |
+          cd dist
+          repeated=$(awk '{ print $2 }' SHA256SUMS.txt | sort | uniq -d)
+          [[ -z "$repeated" ]] || { echo "::error::SHA256SUMS.txt lists more than once: $repeated"; exit 1; }
+          [[ $(wc -l < SHA256SUMS.txt) -eq 6 ]] || { echo "::error::SHA256SUMS.txt lists $(wc -l < SHA256SUMS.txt) assets, not 6"; exit 1; }
+          sha256sum --check --strict SHA256SUMS.txt
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.3
+
+      - name: Sign the checksum manifest with cosign keyless
+        run: |
+          cd dist
+          cosign sign-blob SHA256SUMS.txt \
+            --bundle SHA256SUMS.txt.bundle \
+            --use-signing-config=false \
+            --yes
+
+      - name: Verify the signature against the identity install.sh checks
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          regexp=$(sed -n "s/^RELEASE_IDENTITY_REGEXP='\(.*\)'$/\1/p" install.sh)
+          [[ -n "$regexp" ]] || { echo "::error::RELEASE_IDENTITY_REGEXP not found in install.sh"; exit 1; }
+          cd dist
+          cosign verify-blob SHA256SUMS.txt \
+            --bundle SHA256SUMS.txt.bundle \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "https://github.com/${WORKFLOW_REF}"
+          cosign verify-blob SHA256SUMS.txt \
+            --bundle SHA256SUMS.txt.bundle \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp "$regexp"
+
+      - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat >> "$RUNNER_TEMP/notes.md" <<'NOTES'
+
+          ---
+
+          Install with the scripts in the repository (`install.sh`, `install.ps1`; see the
+          README) or download an archive and check it against `SHA256SUMS.txt`, which is signed
+          keyless by this workflow (`SHA256SUMS.txt.bundle`):
+
+          ```sh
+          cosign verify-blob SHA256SUMS.txt --bundle SHA256SUMS.txt.bundle \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity https://github.com/Open-MBEE/SysPI/.github/workflows/release.yml@refs/tags/TAG
+          sha256sum --check --ignore-missing SHA256SUMS.txt
+          ```
+          NOTES
+          sed -i "s|@refs/tags/TAG|@refs/tags/$TAG|" "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --verify-tag \
+            dist/syspi-* dist/SHA256SUMS.txt dist/SHA256SUMS.txt.bundle
+          gh release view "$TAG" --json url,assets --jq '.url, (.assets[].name)'
+
+  validate-install:
+    name: Install from the release (${{ matrix.os }})
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Install cosign
+        if: runner.os != 'Windows'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.3
+      - name: install.sh
+        if: runner.os != 'Windows'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          sh install.sh --version "$TAG" --prefix "$RUNNER_TEMP/syspi" --verify-signature
+          "$RUNNER_TEMP/syspi/bin/syspi" version | grep -Fx "syspi $TAG"
+      - name: install.ps1
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          .\install.ps1 -Version $env:TAG -InstallDir "$env:RUNNER_TEMP\syspi" -NoPath
+          $reported = & "$env:RUNNER_TEMP\syspi\syspi.exe" version
+          if ($reported -ne "syspi $env:TAG") { throw "reports '$reported'" }

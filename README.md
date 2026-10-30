@@ -77,12 +77,46 @@ hg commit, so two builds of the same tree are byte-identical.
 
 ## Install
 
+Linux and macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Open-MBEE/SysPI/main/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/Open-MBEE/SysPI/main/install.ps1 | iex
+```
+
+Both install the latest release's `syspi` for this machine (`/usr/local/bin` or `~/.local/bin`;
+`%LOCALAPPDATA%\Programs\SysPI` on Windows) after checking the archive against the release's
+`SHA256SUMS.txt`, and run it once to confirm it reports the release. `install.sh --help` lists
+the options (`--version v0.1.0`, `--prefix`, `--bin-dir`, `--verify-signature` for the cosign
+check of the manifest, `--dry-run`); `install.ps1` takes the same as `-Version`, `-InstallDir`,
+`-VerifySignature`, `-DryRun`, and the environment variables `SYSPI_VERSION`, `SYSPI_PREFIX` /
+`SYSPI_INSTALL_DIR` and `SYSPI_DOWNLOAD_BASE` configure a piped run. The checksum guards against a
+corrupt or partial download; it comes from the same place as the archive, so against a replaced
+release only the signature check helps — pass `--verify-signature` / `-VerifySignature` (needs
+[cosign](https://docs.sigstore.dev/cosign/system_config/installation/)) or verify by hand as below.
+
+Each release attaches `syspi-<os>-<arch>.tar.gz` (`.zip` on Windows) for Linux, macOS and
+Windows on amd64 and arm64, `SHA256SUMS.txt`, and its keyless cosign signature
+`SHA256SUMS.txt.bundle`, verifiable with
+
+```sh
+cosign verify-blob SHA256SUMS.txt --bundle SHA256SUMS.txt.bundle \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity https://github.com/Open-MBEE/SysPI/.github/workflows/release.yml@refs/tags/v0.1.0
+```
+
+From source, with Go 1.25 or later:
+
 ```sh
 go install github.com/Open-MBEE/SysPI/cmd/syspi@latest
 ```
 
-Release binaries for Linux, macOS and Windows (amd64, arm64) with a `SHA256SUMS` file are
-attached to each `v*` tag. Requires `git` (and `svn` / `hg` for packages hosted there) on `PATH`.
+Requires `git` (and `svn` / `hg` for packages hosted there) on `PATH`.
 
 ## Interoperability
 
