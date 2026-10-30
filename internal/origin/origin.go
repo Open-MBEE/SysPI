@@ -330,7 +330,7 @@ func parseVCSURL(res, raw string) (*Origin, error) {
 		o.Name = strings.TrimSuffix(path.Base(o.Path), ".git")
 		switch vcs {
 		case "svn":
-			o.Source = "file://" + o.Path
+			o.Source = "file://" + FileURIPath(o.Path)
 		default:
 			o.Source = filepath.FromSlash(o.Path)
 		}

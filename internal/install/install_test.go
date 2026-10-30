@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -297,7 +298,7 @@ func TestLockMatchesAcrossGitSuffixSpellings(t *testing.T) {
 	}
 	first, _ := os.ReadFile(filepath.Join(dir, project.LockFile))
 	// An older lock recorded the source in its input spelling; it is still the same location.
-	oldSrc := strings.ReplaceAll(string(first), `"source": "`+strings.ReplaceAll(filepath.FromSlash(widgets), `\\`, `\\\\`)+`"`, `"source": "git+file://`+filepath.ToSlash(widgets)+`"`)
+	oldSrc := strings.ReplaceAll(string(first), `"source": "`+strings.ReplaceAll(filepath.FromSlash(widgets), "\\", "\\\\")+`"`, `"source": "git+file://`+filepath.ToSlash(widgets)+`"`)
 	if oldSrc == string(first) {
 		t.Fatalf("lock did not contain the widgets source:\n%s", first)
 	}
@@ -549,13 +550,16 @@ func TestPublishRollsBackWhenTheLockCannotBeWritten(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory permissions")
 	}
+	if runtime.GOOS == "windows" {
+		t.Skip("a read-only directory does not refuse new files on Windows")
+	}
 	widgets, _ := fixture(t)
-	dir := consumer(t, project.Usage{Resource: "git+file://" + widgets + "@1.0.0"})
+	dir := consumer(t, project.Usage{Resource: "git+file://" + filepath.ToSlash(widgets) + "@1.0.0"})
 	run(t, dir, Options{})
 	before, _ := os.ReadFile(filepath.Join(dir, project.LockFile))
 	// Move to 1.1.0 (replaces the installed tree) with the project directory read-only,
 	// so the lock cannot be written after lib/ was updated.
-	write(t, dir, project.ProjectFile, `{"name":"app","version":"0.1.0","usage":[{"resource":"git+file://`+widgets+`@1.1.0"}]}`)
+	write(t, dir, project.ProjectFile, `{"name":"app","version":"0.1.0","usage":[{"resource":"git+file://`+filepath.ToSlash(widgets)+`@1.1.0"}]}`)
 	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Fatal(err)
 	}

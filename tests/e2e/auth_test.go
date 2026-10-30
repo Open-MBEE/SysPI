@@ -61,7 +61,7 @@ func TestAuthGitCredentialHelper(t *testing.T) {
 	// With a credential helper configured through the environment, as a user would.
 	helper := filepath.Join(root, "helper.sh")
 	os.WriteFile(helper, []byte("#!/bin/sh\necho username=alice\necho password=s3cret\n"), 0o755)
-	env := []string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=credential.helper", "GIT_CONFIG_VALUE_0=" + helper}
+	env := []string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=credential.helper", "GIT_CONFIG_VALUE_0=" + filepath.ToSlash(helper)}
 	app2 := initApp(t, root, "app-cred")
 	if out, err := shErr(app2, env, bin, "add", res); err != nil {
 		t.Fatalf("add with helper: %v\n%s", err, out)
