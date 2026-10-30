@@ -135,3 +135,38 @@ func TestKey(t *testing.T) {
 		t.Errorf("archive key %s != identity %s", o.Key(), o.Identity())
 	}
 }
+
+// A drive letter is only a drive on Windows; elsewhere /C:/dir is a directory named C:.
+func TestDriveLetterFileURIs(t *testing.T) {
+	defer func(w bool) { windowsPaths = w }(windowsPaths)
+	for _, tc := range []struct {
+		windows       bool
+		in, path, src string
+	}{
+		{true, "git+file:///C:/srv/widgets@1.0.0", "C:/srv/widgets", `C:\srv\widgets`},
+		{true, "git+file://C:/srv/widgets@1.0.0", "C:/srv/widgets", `C:\srv\widgets`},
+		{true, "svn+file:///C:/srv/widgets@1.0.0", "C:/srv/widgets", "file:///C:/srv/widgets"},
+		{false, "git+file:///C:/srv/widgets@1.0.0", "/C:/srv/widgets", "/C:/srv/widgets"},
+		{false, "svn+file:///C:/srv/widgets@1.0.0", "/C:/srv/widgets", "file:///C:/srv/widgets"},
+	} {
+		windowsPaths = tc.windows
+		o, err := Parse(tc.in)
+		if err != nil {
+			t.Errorf("windows=%v %s: %v", tc.windows, tc.in, err)
+			continue
+		}
+		if o.Path != tc.path || o.Source != tc.src {
+			t.Errorf("windows=%v %s: path %q source %q, want %q %q", tc.windows, tc.in, o.Path, o.Source, tc.path, tc.src)
+		}
+		if _, err := Parse(o.Canonical()); err != nil {
+			t.Errorf("windows=%v canonical %s: %v", tc.windows, o.Canonical(), err)
+		}
+	}
+	windowsPaths = false
+	if _, err := Parse("file://C:/tools.kpar"); err == nil {
+		t.Error("file://C:/… must be refused where C: is a host, not a drive")
+	}
+	if o, err := Parse("file:///C:/tools.kpar"); err != nil || o.Source != "/C:/tools.kpar" {
+		t.Errorf("file:///C:/tools.kpar: %v %+v", err, o)
+	}
+}

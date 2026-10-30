@@ -33,7 +33,10 @@ Two input spellings normalise to it (and `syspi add` writes the canonical form i
 `.project.json`): `pkg:git/<host>/<path>[@<version>][#<subpath>]`, meaning `git+https`; and the
 bare vcs_url notation `git+https://…`, `git+ssh://…`, `git://…`, `hg+https://…`,
 `hg+static-http://…`, `svn://…`, `svn+https://…`, `svn+ssh://…`, `<vcs>+file:///…`, each with an
-optional `@<version>` and `#<subpath>`. The version-free identity (`vcs_url` without `@<version>`)
+optional `@<version>` and `#<subpath>`. A repository on a Windows machine is
+`<vcs>+file:///C:/path` (RFC 8089); `<vcs>+file://C:/path` is accepted as input and normalised to
+it, and the same two forms name a local `.kpar` or project directory (`file:///C:/tools.kpar`).
+On other systems `/C:/path` is an ordinary directory named `C:`. The version-free identity (`vcs_url` without `@<version>`)
 is what the lock records as `resource`; what the VCS executable is given is kept as `source`
 (`git+ssh` stays SSH; the path is cloned exactly as written, so `…/repo` and `…/repo.git` are
 two locations and the one your server serves is the one to write).
