@@ -18,7 +18,7 @@ what package managers install.
   plus `file` for a repository on this machine; `<name>` is the repository's last path segment.
   Two shorter spellings are accepted as input and normalised to it: `pkg:git/<host>/<path>[@<version>][#<subpath>]`
   (git over https) and the bare notation `git+https://host/path@1.2.0`, `svn://host/repo@1.2.0`,
-  `hg+https://…`, `git+file:///srv/repo@1.2.0`. Refused with a message naming those three:
+  `hg+https://…`, `git+file:///srv/repo@1.2.0` (`git+file:///C:/repo@1.2.0` on Windows). Refused with a message naming those three:
   `pkg:svn/…`, `pkg:hg/…`, `pkg:github/…`, plain clone URLs (`https://host/path.git`, `ssh://…`,
   `git@host:path`, `file:///path@1.2.0`) and a commit id as version. SysPI hand-parses this one
   purl shape and uses no purl library. A plain `http(s)` IRI is only ever read as a project

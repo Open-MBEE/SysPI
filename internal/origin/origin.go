@@ -18,6 +18,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/Open-MBEE/SysPI/internal/version"
@@ -303,7 +304,7 @@ func parseVCSURL(res, raw string) (*Origin, error) {
 	}
 	if transport == "file" {
 		// file:///C:/path is the RFC 8089 form; file://C:/path is accepted as input.
-		if drive.MatchString(rest) {
+		if isDrivePath(rest) {
 			rest = "/" + rest
 		}
 	}
@@ -323,7 +324,7 @@ func parseVCSURL(res, raw string) (*Origin, error) {
 			return nil, fmt.Errorf("resource %q: a repository on this machine is %s+file:///absolute/path", res, vcs)
 		}
 		o.Path = u.Path
-		if drive.MatchString(o.Path[1:]) {
+		if isDrivePath(o.Path[1:]) {
 			o.Path = o.Path[1:]
 		}
 		o.Path = filepath.ToSlash(filepath.Clean(o.Path))
@@ -402,6 +403,12 @@ func parseHTTP(res string) (*Origin, error) {
 // drive matches the start of a Windows path, C:/ or C:\.
 var drive = regexp.MustCompile(`^[A-Za-z]:[/\\]`)
 
+// windowsPaths is whether this machine spells absolute paths with a drive; on
+// other systems /C:/dir is an ordinary directory named C:.
+var windowsPaths = runtime.GOOS == "windows"
+
+func isDrivePath(p string) bool { return windowsPaths && drive.MatchString(p) }
+
 // FileURIPath is the path part of a file:// URI naming abs: /C:/dir on Windows, /dir elsewhere.
 func FileURIPath(abs string) string {
 	abs = filepath.ToSlash(abs)
@@ -413,13 +420,13 @@ func FileURIPath(abs string) string {
 
 // fileURIPath turns what follows file:// into a path on this machine; a host is refused.
 func fileURIPath(rest string) (string, bool) {
-	if drive.MatchString(rest) {
+	if isDrivePath(rest) {
 		return rest, true
 	}
 	if !strings.HasPrefix(rest, "/") {
 		return "", false
 	}
-	if drive.MatchString(rest[1:]) {
+	if isDrivePath(rest[1:]) {
 		return rest[1:], true
 	}
 	return rest, true

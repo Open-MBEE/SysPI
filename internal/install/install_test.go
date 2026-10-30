@@ -550,9 +550,6 @@ func TestPublishRollsBackWhenTheLockCannotBeWritten(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory permissions")
 	}
-	if runtime.GOOS == "windows" {
-		t.Skip("a read-only directory does not refuse new files on Windows")
-	}
 	widgets, _ := fixture(t)
 	dir := consumer(t, project.Usage{Resource: "git+file://" + filepath.ToSlash(widgets) + "@1.0.0"})
 	run(t, dir, Options{})
@@ -560,14 +557,20 @@ func TestPublishRollsBackWhenTheLockCannotBeWritten(t *testing.T) {
 	// Move to 1.1.0 (replaces the installed tree) with the project directory read-only,
 	// so the lock cannot be written after lib/ was updated.
 	write(t, dir, project.ProjectFile, `{"name":"app","version":"0.1.0","usage":[{"resource":"git+file://`+filepath.ToSlash(widgets)+`@1.1.0"}]}`)
-	if err := os.Chmod(dir, 0o555); err != nil {
+	// Windows ignores directory modes but refuses to replace a read-only file.
+	locked, mode := dir, os.FileMode(0o555)
+	if runtime.GOOS == "windows" {
+		locked, mode = filepath.Join(dir, project.LockFile), 0o444
+	}
+	if err := os.Chmod(locked, mode); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	t.Cleanup(func() { os.Chmod(locked, mode|0o200) })
 	opts := Options{Root: dir}
 	_, err := Run(context.Background(), opts)
-	os.Chmod(dir, 0o755)
-	if err == nil || !strings.Contains(err.Error(), "permission denied") || !strings.Contains(err.Error(), project.LockFile) {
+	os.Chmod(locked, mode|0o200)
+	denied := err != nil && (strings.Contains(err.Error(), "permission denied") || strings.Contains(err.Error(), "Access is denied"))
+	if !denied || !strings.Contains(err.Error(), project.LockFile) {
 		t.Fatalf("the lock write must be what failed: %v", err)
 	}
 	after, _ := os.ReadFile(filepath.Join(dir, project.LockFile))
