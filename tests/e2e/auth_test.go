@@ -120,11 +120,16 @@ func TestAuthSvnNetrc(t *testing.T) {
 	requireOrSkip(t, "svn", "svnadmin", "svnserve")
 	bin := syspiBinary(t)
 	root := t.TempDir()
-	url := svnFixture(t, root)
-	repo := strings.TrimPrefix(url, "file://")
-	conf := filepath.Join(repo, "conf")
-	os.WriteFile(filepath.Join(conf, "svnserve.conf"), []byte("[general]\nanon-access = none\nauth-access = read\npassword-db = passwd\nrealm = pkg\n"), 0o644)
-	os.WriteFile(filepath.Join(conf, "passwd"), []byte("[users]\nalice = s3cret\n"), 0o644)
+	svnFixture(t, root)
+	conf := filepath.Join(root, "widgets-svn", "conf")
+	for name, content := range map[string]string{
+		"svnserve.conf": "[general]\nanon-access = none\nauth-access = read\npassword-db = passwd\nrealm = pkg\n",
+		"passwd":        "[users]\nalice = s3cret\n",
+	} {
+		if err := os.WriteFile(filepath.Join(conf, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	port := freePort(t)
 	pid := filepath.Join(root, "svnserve.pid")
 	cmd := exec.Command("svnserve", "-d", "--foreground", "--listen-host", "127.0.0.1", "--listen-port", strconv.Itoa(port), "-r", root, "--pid-file", pid)

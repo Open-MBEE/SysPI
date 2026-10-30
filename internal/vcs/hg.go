@@ -26,10 +26,12 @@ func (h *hgSource) ListVersions(ctx context.Context) ([]Version, error) {
 	}
 	defer os.RemoveAll(scratch)
 	clone := filepath.Join(scratch, "repo")
-	if _, err := run(ctx, "", "hg", "clone", "--quiet", "--noupdate", "--", h.url, clone); err != nil {
+	// --noninteractive: hg would otherwise prompt for HTTP credentials (and on Windows
+	// takes the NUL stdin for a terminal); the abort then names the authorization.
+	if _, err := run(ctx, "", "hg", "--noninteractive", "clone", "--quiet", "--noupdate", "--", h.url, clone); err != nil {
 		return nil, err
 	}
-	out, err := run(ctx, clone, "hg", "tags", "--quiet")
+	out, err := run(ctx, clone, "hg", "--noninteractive", "tags", "--quiet")
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +46,7 @@ func (h *hgSource) ListVersions(ctx context.Context) ([]Version, error) {
 
 // Revision is the 40-hex changeset node id the tag points at.
 func (h *hgSource) Revision(ctx context.Context, v Version) (string, error) {
-	out, err := run(ctx, "", "hg", "identify", "--id", "--debug", "-r", v.Tag, "--", h.url)
+	out, err := run(ctx, "", "hg", "--noninteractive", "identify", "--id", "--debug", "-r", v.Tag, "--", h.url)
 	if err != nil {
 		return "", err
 	}
@@ -76,13 +78,13 @@ func (h *hgSource) Export(ctx context.Context, v Version, dst string) error {
 	}
 	defer os.RemoveAll(scratch)
 	clone := filepath.Join(scratch, "repo")
-	if _, err := run(ctx, "", "hg", "clone", "--quiet", "--noupdate", "-r", node, "--", h.url, clone); err != nil {
+	if _, err := run(ctx, "", "hg", "--noninteractive", "clone", "--quiet", "--noupdate", "-r", node, "--", h.url, clone); err != nil {
 		return err
 	}
 	// --no-decode keeps bytes as committed. The .hg_archival.txt stamp and the
 	// .hgtags bookkeeping file are Mercurial's own, not the package's, and are
 	// excluded so the tree hash matches the same package served from git or svn.
-	if _, err := run(ctx, clone, "hg", "archive", "--quiet", "--type", "files", "-r", node, "--no-decode", "--exclude", ".hg_archival.txt", "--exclude", ".hgtags", dst); err != nil {
+	if _, err := run(ctx, clone, "hg", "--noninteractive", "archive", "--quiet", "--type", "files", "-r", node, "--no-decode", "--exclude", ".hg_archival.txt", "--exclude", ".hgtags", dst); err != nil {
 		return err
 	}
 	return nil
