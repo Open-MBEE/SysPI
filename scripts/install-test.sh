@@ -174,7 +174,7 @@ fails "tampered archive" "does not match SHA256SUMS.txt" --version "$tampered" -
 if command -v cosign >/dev/null 2>&1; then
 	fails "signature requested, release unsigned" "could not download" --version "$good" --prefix @P@ --verify-signature
 else
-	fails "signature requested, no cosign" "cosign is needed" --version "$good" --prefix @P@ --verify-signature
+	fails "signature requested, no cosign" "needs cosign on PATH" --version "$good" --prefix @P@ --verify-signature
 fi
 absent bin/syspi
 fails "conflicting digests" "more than one digest" --version "$conflicting" --prefix @P@
