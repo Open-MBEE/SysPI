@@ -1,1 +1,0 @@
-- `syspi -h` names the ECMA-427 identity grammar and the two input spellings it normalises, instead of the refused `pkg:<vcs>/<host>/<path>` form.
