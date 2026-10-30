@@ -61,7 +61,7 @@ try {
         $Server = Start-Process -FilePath python3 -ArgumentList @((Join-Path $Root 'scripts/install-test-server.py'), (Join-Path $Work 'site'), $Good) -RedirectStandardOutput $portFile -PassThru -NoNewWindow
         $port = $null
         foreach ($attempt in 1..50) {
-            if ((Test-Path -LiteralPath $portFile) -and (Get-Content -LiteralPath $portFile -ErrorAction SilentlyContinue)) { $port = (Get-Content -LiteralPath $portFile)[0].Trim(); break }
+            if ((Test-Path -LiteralPath $portFile) -and (Get-Content -LiteralPath $portFile -ErrorAction SilentlyContinue)) { $port = @(Get-Content -LiteralPath $portFile)[0].Trim(); break }
             Start-Sleep -Milliseconds 100
         }
         if (-not $port) { throw 'the release server did not start' }
