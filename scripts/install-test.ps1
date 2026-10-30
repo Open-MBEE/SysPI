@@ -134,6 +134,8 @@ try {
 
     if ($script:failures -gt 0) { Write-Host "install-test.ps1: $script:failures failure(s)"; exit 1 }
     Write-Host 'install-test.ps1: all cases passed'
+    # The last native command was an installer expected to fail; do not hand its code to the caller.
+    exit 0
 } finally {
     if ($Server) { Stop-Process -Id $Server.Id -Force -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue
