@@ -21,7 +21,7 @@ func TestSvnAuthArgsFor(t *testing.T) {
 	if strings.Join(args, " ") != "--username alice --password-from-stdin --no-auth-cache" {
 		t.Fatalf("args %q", args)
 	}
-	if pw, _ := io.ReadAll(stdin); string(pw) != "s3cret\n" {
+	if pw, _ := io.ReadAll(stdin); string(pw) != "s3cret" {
 		t.Fatalf("stdin %q", pw)
 	}
 	for _, a := range args {
