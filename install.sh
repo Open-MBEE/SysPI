@@ -24,7 +24,7 @@ DEFAULT_BASE_URL="$REPO_URL/releases"
 
 # The identity the checksum manifest is signed with: the release workflow, run on the tag.
 RELEASE_OIDC_ISSUER="https://token.actions.githubusercontent.com"
-RELEASE_IDENTITY_REGEXP='^https://github\.com/Open-MBEE/SysPI/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
+RELEASE_IDENTITY_REGEXP='^https://github\.com/Open-MBEE/SysPI/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
 
 version="${SYSPI_VERSION:-latest}"
 prefix="${SYSPI_PREFIX:-}"
@@ -355,7 +355,8 @@ cp "$source" "$destination.tmp.$$" && chmod 0755 "$destination.tmp.$$" && mv -f 
 # --- check ------------------------------------------------------------------
 
 if [ "$is_host_platform" = true ]; then
-	reported=$("$destination" version 2>&1 | head -n 1) || fail "$destination does not run: $reported"
+	reported=$("$destination" version 2>&1) || fail "$destination does not run: $reported"
+	reported=$(printf '%s\n' "$reported" | head -n 1)
 	if [ -n "$tag" ]; then
 		case " $reported " in
 		*" $tag "*) ;;

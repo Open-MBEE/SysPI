@@ -111,12 +111,13 @@ jobs:
         env:
           WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
+          regexp=$(sed -n "s/^RELEASE_IDENTITY_REGEXP='\(.*\)'$/\1/p" install.sh)
+          [[ -n "$regexp" ]] || { echo "::error::RELEASE_IDENTITY_REGEXP not found in install.sh"; exit 1; }
           cd dist
           cosign verify-blob SHA256SUMS.txt \
             --bundle SHA256SUMS.txt.bundle \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             --certificate-identity "https://github.com/${WORKFLOW_REF}"
-          regexp=$(sed -n "s/^RELEASE_IDENTITY_REGEXP='\(.*\)'$/\1/p" install.sh)
           cosign verify-blob SHA256SUMS.txt \
             --bundle SHA256SUMS.txt.bundle \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \

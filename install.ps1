@@ -61,6 +61,7 @@ param(
     [string]$Arch = '',
     [string]$BaseUrl = $(if ($env:SYSPI_DOWNLOAD_BASE) { $env:SYSPI_DOWNLOAD_BASE } else { 'https://github.com/Open-MBEE/SysPI/releases' }),
     [switch]$NoPath,
+    [switch]$VerifySignature,
     [switch]$DryRun
 )
 
@@ -70,6 +71,10 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $RepoUrl = 'https://github.com/Open-MBEE/SysPI'
+# The identity the checksum manifest is signed with: the release workflow, run on the tag.
+$ReleaseOidcIssuer = 'https://token.actions.githubusercontent.com'
+$WantSignature = [bool]$VerifySignature
+$ReleaseIdentityRegexp = '^https://github\.com/Open-MBEE/SysPI/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
 $GoInstallHint = "'go install github.com/Open-MBEE/SysPI/cmd/syspi@latest' builds one for this machine"
 
 # Run as a file the script exits with the message; piped into Invoke-Expression it
@@ -190,6 +195,19 @@ function Get-Asset([string]$Asset) {
     }
 }
 
+# Fetches the manifest and, with -VerifySignature, checks its cosign bundle before
+# anything is read from it.
+function Get-Manifest {
+    Get-Asset $Manifest
+    if (-not $WantSignature) { return }
+    if (-not (Get-Command cosign -ErrorAction SilentlyContinue)) { Fail 'cosign is needed for -VerifySignature; see https://docs.sigstore.dev/cosign/system_config/installation/' }
+    Get-Asset "$Manifest.bundle"
+    & cosign verify-blob (Join-Path $Work $Manifest) --bundle (Join-Path $Work "$Manifest.bundle") `
+        --certificate-oidc-issuer $ReleaseOidcIssuer --certificate-identity-regexp $ReleaseIdentityRegexp 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "$Manifest is not signed by the SysPI release workflow" }
+    Write-Host "  signature of $Manifest verified"
+}
+
 function Get-ManifestDigest([string]$Asset) {
     # The asset's distinct digests in the manifest, none when it is not listed;
     # a line repeated verbatim counts once.
@@ -222,7 +240,7 @@ if ($DryRun) {
 New-Item -ItemType Directory -Path $Work -Force | Out-Null
 try {
     Write-Host 'Downloading...'
-    Get-Asset $Manifest
+    Get-Manifest
     Get-Asset $Archive
     Test-Checksum $Archive
 

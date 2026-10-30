@@ -94,8 +94,11 @@ Both install the latest release's `syspi` for this machine (`/usr/local/bin` or 
 `SHA256SUMS.txt`, and run it once to confirm it reports the release. `install.sh --help` lists
 the options (`--version v0.1.0`, `--prefix`, `--bin-dir`, `--verify-signature` for the cosign
 check of the manifest, `--dry-run`); `install.ps1` takes the same as `-Version`, `-InstallDir`,
-`-DryRun`, and the environment variables `SYSPI_VERSION`, `SYSPI_PREFIX` / `SYSPI_INSTALL_DIR`
-and `SYSPI_DOWNLOAD_BASE` configure a piped run.
+`-VerifySignature`, `-DryRun`, and the environment variables `SYSPI_VERSION`, `SYSPI_PREFIX` /
+`SYSPI_INSTALL_DIR` and `SYSPI_DOWNLOAD_BASE` configure a piped run. The checksum guards against a
+corrupt or partial download; it comes from the same place as the archive, so against a replaced
+release only the signature check helps — pass `--verify-signature` / `-VerifySignature` (needs
+[cosign](https://docs.sigstore.dev/cosign/system_config/installation/)) or verify by hand as below.
 
 Each release attaches `syspi-<os>-<arch>.tar.gz` (`.zip` on Windows) for Linux, macOS and
 Windows on amd64 and arm64, `SHA256SUMS.txt`, and its keyless cosign signature

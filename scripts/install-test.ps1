@@ -127,6 +127,12 @@ try {
         Said "staged for $Foreign"
     }
     Fails 'tampered archive' 'does not match SHA256SUMS.txt' @('-Version', $Tampered, '-InstallDir', '@P@')
+    # The fake release has no bundle: asking for the signature must refuse, whether or not cosign is here.
+    if (Get-Command cosign -ErrorAction SilentlyContinue) {
+        Fails 'signature requested, release unsigned' 'could not download' @('-Version', $Good, '-InstallDir', '@P@', '-VerifySignature')
+    } else {
+        Fails 'signature requested, no cosign' 'cosign is needed' @('-Version', $Good, '-InstallDir', '@P@', '-VerifySignature')
+    }
     Fails 'binary reporting another version' "reports 'syspi $Good', not $Mismatch" @('-Version', $Mismatch, '-InstallDir', '@P@')
     Fails 'platform the release lacks' "does not list syspi-$Foreign" @('-Version', $Partial, '-InstallDir', '@P@', '-Os', $Foreign.Split('-')[0], '-Arch', $Foreign.Split('-')[1])
     Fails 'unknown release' 'could not download' @('-Version', 'v0.0.0-none', '-InstallDir', '@P@')

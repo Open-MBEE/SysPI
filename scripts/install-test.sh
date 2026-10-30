@@ -170,6 +170,12 @@ set -e
 if [[ $status -eq 0 ]]; then echo "ok   SYSPI_* environment"; reports "$prefix/bin/syspi" "$older"; else echo "FAIL SYSPI_* environment: exit $status" >&2; printf '%s\n' "$out" >&2; failures=$((failures + 1)); fi
 
 fails "tampered archive" "does not match SHA256SUMS.txt" --version "$tampered" --prefix @P@
+# The fake release has no bundle: asking for the signature must refuse, whether or not cosign is here.
+if command -v cosign >/dev/null 2>&1; then
+	fails "signature requested, release unsigned" "could not download" --version "$good" --prefix @P@ --verify-signature
+else
+	fails "signature requested, no cosign" "cosign is needed" --version "$good" --prefix @P@ --verify-signature
+fi
 absent bin/syspi
 fails "conflicting digests" "more than one digest" --version "$conflicting" --prefix @P@
 absent bin/syspi
