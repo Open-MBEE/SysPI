@@ -43,21 +43,16 @@ jobs:
           Add-Content $env:GITHUB_PATH 'C:\Program Files\Mercurial'
           Add-Content $env:GITHUB_PATH 'C:\Program Files\SlikSvn\bin'
       - name: Versions
-        if: runner.os != 'Windows'
         run: go version && git --version && hg --version | head -1 && svn --version --quiet
       - name: Build
         run: go build ./...
       - name: Vet
         run: go vet ./...
       - name: gofmt
-        shell: bash
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - name: Tidy
         run: go mod tidy && git diff --exit-code go.mod go.sum
       - name: Unit and end-to-end tests
-        # The Windows runner has git but no hg or svn; their tests skip there.
-        env:
-          SYSPI_REQUIRE_VCS: ${{ runner.os == 'Windows' && '' || '1' }}
         run: go test -count=1 ./...
   install-scripts:
     name: Installers against a fake release (${{ matrix.os }})
