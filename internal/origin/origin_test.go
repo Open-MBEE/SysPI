@@ -3,6 +3,7 @@
 package origin
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -26,7 +27,7 @@ func TestCanonical(t *testing.T) {
 		{"svn://svn.example.org/pkg@1.0.0", "pkg:generic/pkg?vcs_url=svn%2Bsvn:%2F%2Fsvn.example.org%2Fpkg%401.0.0", "svn://svn.example.org/pkg"},
 		{"svn+https://svn.example.org/repos/pkg", "pkg:generic/pkg?vcs_url=svn%2Bhttps:%2F%2Fsvn.example.org%2Frepos%2Fpkg", "https://svn.example.org/repos/pkg"},
 		{"svn+ssh://svn.example.org/repos/pkg", "pkg:generic/pkg?vcs_url=svn%2Bssh:%2F%2Fsvn.example.org%2Frepos%2Fpkg", "svn+ssh://svn.example.org/repos/pkg"},
-		{"git+file:///srv/git/widgets@1.0.0#packages/gears", "pkg:generic/widgets?vcs_url=git%2Bfile:%2F%2F%2Fsrv%2Fgit%2Fwidgets%401.0.0%23packages%2Fgears", "/srv/git/widgets"},
+		{"git+file:///srv/git/widgets@1.0.0#packages/gears", "pkg:generic/widgets?vcs_url=git%2Bfile:%2F%2F%2Fsrv%2Fgit%2Fwidgets%401.0.0%23packages%2Fgears", filepath.FromSlash("/srv/git/widgets")},
 		{"svn+file:///srv/svn/widgets", "pkg:generic/widgets?vcs_url=svn%2Bfile:%2F%2F%2Fsrv%2Fsvn%2Fwidgets", "file:///srv/svn/widgets"},
 	} {
 		o, err := Parse(tc.in)
@@ -67,6 +68,9 @@ func TestArchivesAndDirectories(t *testing.T) {
 	}
 }
 
+// srvGitWidgets is /srv/git/widgets as a file-URI path on this machine (/D:/srv/git/widgets on Windows).
+var srvGitWidgets = func() string { abs, _ := filepath.Abs(filepath.FromSlash("/srv/git/widgets")); return FileURIPath(abs) }()
+
 func TestRefused(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"pkg:svn/svn.example.org/pkg@1.0.0", "pkg:svn is not a Package-URL type; write pkg:generic/<name>?vcs_url="},
@@ -78,9 +82,9 @@ func TestRefused(t *testing.T) {
 		{"https://github.com/acme/widgets.git", "only dereferenced as a project interchange file"},
 		{"git@github.com:acme/widgets.git@1.0.0", "write git+ssh://github.com/acme/widgets"},
 		{"ssh://git@github.com/acme/widgets@1.0.0", "unsupported URL scheme; a repository is written as pkg:generic"},
-		{"file:///srv/git/widgets@1.0.0", "a repository on this machine is git+file:///srv/git/widgets@1.0.0"},
-		{"/srv/git/widgets@1.0.0", "a repository on this machine is git+file:///srv/git/widgets@1.0.0"},
-		{"pkg:git//srv/git/widgets@1.0.0", "a repository on this machine is git+file:///srv/git/widgets@1.0.0"},
+		{"file:///srv/git/widgets@1.0.0", "a repository on this machine is git+file://" + srvGitWidgets + "@1.0.0"},
+		{"/srv/git/widgets@1.0.0", "a repository on this machine is git+file://" + srvGitWidgets + "@1.0.0"},
+		{"pkg:git//srv/git/widgets@1.0.0", "a repository on this machine is git+file://" + srvGitWidgets + "@1.0.0"},
 		{"git+https://user:pw@github.com/acme/widgets", "user name or password in the host is not supported (ECMA-427 Annex B.3.5)"},
 		{"hg://hg.example.org/repo", "hg+hg is not a vcs_url scheme for hg (ECMA-427 Annex B.3.5 allows hg+http, hg+https, hg+static-http, hg+ssh, hg+file)"},
 		{"git+ftp://host/repo", "git+ftp is not a vcs_url scheme for git"},

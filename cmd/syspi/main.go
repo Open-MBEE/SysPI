@@ -39,8 +39,12 @@ Commands:
   bundle    build a deterministic .kpar from a project directory
   version   print the version
 
-A package is any git, svn or hg repository with .project.json at a tag:
-  pkg:<vcs>/<host>/<path>[@<version>][#<subpath>]
+A package is any git, svn or hg repository with .project.json at a tag, identified by an
+ECMA-427 Package-URL (vcs: git, svn, hg; transports per Annex B.3.5, plus file):
+  pkg:generic/<name>?vcs_url=<vcs>%2B<transport>:%2F%2F<host>%2F<path>[%40<version>][%23<subpath>]
+Accepted as input and normalised to it:
+  pkg:git/<host>/<path>[@<version>][#<subpath>]
+  <vcs>+<transport>://<host>/<path>[@<version>][#<subpath>]
 Run "syspi <command> -h" for the flags of a command.
 `
 

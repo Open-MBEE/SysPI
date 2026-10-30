@@ -1,0 +1,1 @@
+- On Windows, a repository on this machine is accepted as `git+file:///C:/path` (and `git+file://C:/path`), `file://` resources with a drive letter resolve, and the suite runs on Windows; CI gates on Windows with hg and svn installed.

@@ -98,12 +98,21 @@ func hgFixture(t *testing.T) string {
 	return repo
 }
 
+// fileURL is the file:// URL of an absolute path on this machine (file:///C:/x on Windows).
+func fileURL(p string) string {
+	p = filepath.ToSlash(p)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return "file://" + p
+}
+
 func svnFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	repo := filepath.Join(root, "repo")
 	sh(t, root, nil, "svnadmin", "create", repo)
-	url := "file://" + filepath.ToSlash(repo)
+	url := fileURL(repo)
 	stage := filepath.Join(root, "stage")
 	os.MkdirAll(filepath.Join(stage, "trunk"), 0o755)
 	os.MkdirAll(filepath.Join(stage, "tags"), 0o755)
