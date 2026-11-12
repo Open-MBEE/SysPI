@@ -643,6 +643,17 @@ func TestHostedArchive(t *testing.T) {
 	runErr(t, dir, Options{Offline: true}, "checksum mismatch: the resource declares sha256 "+strings.Repeat("00", 32)+", the archive has "+sum)
 	rewrite(t, dir, project.Usage{Resource: id + "&checksum=sha1:" + strings.Repeat("00", 20)})
 	runErr(t, dir, Options{Offline: true}, "checksum mismatch: the resource declares sha1 "+strings.Repeat("00", 20))
+	// A damaged installed copy is replaced from the server, not reported
+	// against the declared sha1.
+	rewrite(t, dir, project.Usage{Resource: id + "&checksum=sha1:" + sha1sum})
+	installed := filepath.Join(dir, "lib", "acme-tools_3.1.0.kpar")
+	write(t, dir, "lib/acme-tools_3.1.0.kpar", "damaged")
+	if res, _ := run(t, dir, Options{}); len(res.Installed) != 1 {
+		t.Fatalf("damaged copy %+v", res)
+	}
+	if d, _ := digest.File(installed); d != sum {
+		t.Fatal("damaged copy not replaced")
+	}
 	// A second usage of the same archive is held to its own checksums, even
 	// when the first already resolved it.
 	other := t.TempDir()

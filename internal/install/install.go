@@ -494,8 +494,10 @@ func (r *resolver) verifyDeclared(o *origin.Origin, e *lock.Entry) (bool, error)
 	if file == "" {
 		return false, nil
 	}
-	got, err := digest.Sums(file, unchecked)
-	if err != nil {
+	// A copy that is not the locked archive (damaged, say) is no witness; the
+	// download replaces it and is checked instead.
+	got, err := digest.Sums(file, append(unchecked, digest.Checksum{Algorithm: "sha256", Value: e.SHA256}))
+	if err != nil || got["sha256"] != e.SHA256 {
 		return false, err
 	}
 	for algo, v := range got {
