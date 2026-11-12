@@ -36,6 +36,7 @@ Commands:
   install   resolve .project.json and the lock, install what is missing or changed
   sync      same as install
   lock      resolve and write .project.lock.json without installing
+  verify    check every installed copy under lib/ against the lock; exit 1 on a discrepancy
   bundle    build a deterministic .kpar from a project directory
   version   print the version
 
@@ -69,6 +70,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdInstall(ctx, args[0], args[1:], stdout, stderr, false)
 	case "lock":
 		err = cmdInstall(ctx, args[0], args[1:], stdout, stderr, true)
+	case "verify":
+		err = cmdVerify(args[1:], stdout, stderr)
 	case "bundle":
 		err = cmdBundle(ctx, args[1:], stdout, stderr)
 	case "version", "-version", "--version":
@@ -256,6 +259,33 @@ func cmdInstall(ctx context.Context, name string, args []string, stdout, stderr 
 		return err
 	}
 	report(stdout, res)
+	return nil
+}
+
+func cmdVerify(args []string, stdout, stderr io.Writer) error {
+	var c commonFlags
+	fs := newFlagSet("verify", stderr, "[flags]")
+	c.bind(fs)
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		fs.Usage()
+		return errUsage
+	}
+	ds, n, err := install.Verify(c.dir)
+	if err != nil {
+		return err
+	}
+	for i := range ds {
+		fmt.Fprintln(stdout, ds[i].String())
+	}
+	if len(ds) > 0 {
+		return fmt.Errorf("%d package(s) checked against %s: %d discrepancy(ies)", n, project.LockFile, len(ds))
+	}
+	if !c.quiet {
+		fmt.Fprintf(stdout, "%d package(s) checked against %s: no discrepancy\n", n, project.LockFile)
+	}
 	return nil
 }
 

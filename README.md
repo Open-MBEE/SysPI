@@ -56,6 +56,7 @@ syspi init [-C dir] [-publisher P] [-name N] [-version V]   write .project.json 
 syspi add <resource>[@<version>] [<constraint>]              add a usage, resolve, install, lock
 syspi install | sync                                          resolve .project.json + lock, install what is missing or changed
 syspi lock                                                    write .project.lock.json without installing
+syspi verify                                                  check lib/ against the lock, offline; exit 1 on any discrepancy, write nothing
 syspi bundle [-o out.kpar] [-tag T] <dir>                     deterministic .kpar; checks tag == version in a tagged checkout
 ```
 
