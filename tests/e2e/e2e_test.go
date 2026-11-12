@@ -8,6 +8,8 @@ package e2e
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -424,5 +426,64 @@ func TestRefusals(t *testing.T) {
 	out, err := shErr(app, []string{"PATH=" + t.TempDir()}, bin, "add", gitRes+"@1.0.0")
 	if err == nil || !strings.Contains(out, `"git" is required`) || strings.Contains(out, "panic") {
 		t.Fatalf("missing git: %v\n%s", err, out)
+	}
+}
+
+// A .kpar served over HTTP and named by a download_url purl: a wrong checksum
+// installs nothing and leaves .project.json alone; the right one installs it.
+func TestHostedArchive(t *testing.T) {
+	bin := syspiBinary(t)
+	root := t.TempDir()
+	tools := filepath.Join(root, "tools")
+	write(t, tools, ".project.json", "{\n  \"name\": \"tools\",\n  \"publisher\": \"acme\",\n  \"version\": \"3.0.0\"\n}\n")
+	write(t, tools, "Tools.sysml", "package Tools {\n  part def Tool;\n}\n")
+	served := filepath.Join(root, "served")
+	os.MkdirAll(served, 0o755)
+	kpar := filepath.Join(served, "release.kpar")
+	if out, err := shErr(root, []string{"SOURCE_DATE_EPOCH=1700000000"}, bin, "bundle", "-o", kpar, tools); err != nil {
+		t.Fatalf("bundle: %v\n%s", err, out)
+	}
+	data, _ := os.ReadFile(kpar)
+	sum := sha256.Sum256(data)
+	hexSum := hex.EncodeToString(sum[:])
+	srv := httptest.NewServer(http.FileServer(http.Dir(served)))
+	defer srv.Close()
+	enc := strings.NewReplacer("/", "%2F").Replace(srv.URL) + "%2Frelease.kpar"
+	id := "pkg:generic/tools?download_url=" + enc
+
+	app := filepath.Join(root, "app")
+	os.MkdirAll(app, 0o755)
+	sh(t, app, bin, "init", "-publisher", "test", "-name", "app")
+	pj, _ := os.ReadFile(filepath.Join(app, ".project.json"))
+	out, err := shErr(app, nil, bin, "add", id+"&checksum=sha256:"+strings.Repeat("00", 32))
+	if err == nil || !strings.Contains(out, "checksum mismatch: the resource declares sha256 "+strings.Repeat("00", 32)+", the archive has "+hexSum) {
+		t.Fatalf("wrong checksum: %v\n%s", err, out)
+	}
+	if after, _ := os.ReadFile(filepath.Join(app, ".project.json")); !bytes.Equal(pj, after) {
+		t.Fatalf(".project.json changed by a failed add:\n%s", after)
+	}
+	for _, p := range []string{"lib", ".project.lock.json"} {
+		if _, err := os.Stat(filepath.Join(app, p)); err == nil {
+			t.Fatalf("%s exists after a failed add", p)
+		}
+	}
+	sh(t, app, bin, "add", "pkg:generic/tools@3.0.0?download_url="+enc+"&checksum=SHA256:"+strings.ToUpper(hexSum))
+	pj, _ = os.ReadFile(filepath.Join(app, ".project.json"))
+	if want := `"resource": "pkg:generic/tools@3.0.0?checksum=sha256:` + hexSum + `&download_url=` + enc + `"`; !strings.Contains(string(pj), want) {
+		t.Fatalf(".project.json lacks the canonical form %s:\n%s", want, pj)
+	}
+	if _, err := os.Stat(filepath.Join(app, "lib", "acme-tools_3.0.0.kpar")); err != nil {
+		t.Fatal(err)
+	}
+	lk, _ := os.ReadFile(filepath.Join(app, ".project.lock.json"))
+	if lockField(t, string(lk), id, "kind") != "archive" || lockField(t, string(lk), id, "sha256") != hexSum || lockField(t, string(lk), id, "source") != srv.URL+"/release.kpar" {
+		t.Fatalf("lock entry:\n%s", lk)
+	}
+	// Offline from lib/ and the lock with the server gone.
+	srv.Close()
+	sh(t, app, bin, "install", "-offline")
+	sh(t, app, bin, "lock", "-offline")
+	if lk2, _ := os.ReadFile(filepath.Join(app, ".project.lock.json")); !bytes.Equal(lk, lk2) {
+		t.Fatalf("lock changed offline:\n%s\n%s", lk, lk2)
 	}
 }

@@ -89,7 +89,7 @@ func TestRefused(t *testing.T) {
 		{"hg://hg.example.org/repo", "hg+hg is not a vcs_url scheme for hg (ECMA-427 Annex B.3.5 allows hg+http, hg+https, hg+static-http, hg+ssh, hg+file)"},
 		{"git+ftp://host/repo", "git+ftp is not a vcs_url scheme for git"},
 		{"bzr+https://host/repo", "version-control system \"bzr\" is not supported; supported: git, svn, hg"},
-		{"pkg:generic/widgets", "pkg:generic needs a vcs_url qualifier"},
+		{"pkg:generic/widgets", "pkg:generic needs a vcs_url or download_url qualifier"},
 		{"pkg:generic/other?vcs_url=git%2Bhttps:%2F%2Fgithub.com%2Facme%2Fwidgets", "purl name \"other\" must be the repository's last path segment \"widgets\""},
 		{"pkg:generic/widgets?vcs_url=git%2Bhttps:%2F%2Fgithub.com%2Facme%2Fwidgets&arch=x", "qualifier \"arch\" is not supported"},
 		{"pkg:generic/widgets@1.0.0?vcs_url=git%2Bhttps:%2F%2Fgithub.com%2Facme%2Fwidgets%402.0.0", "version 1.0.0 in the purl and 2.0.0 in vcs_url disagree"},
@@ -171,5 +171,77 @@ func TestDriveLetterFileURIs(t *testing.T) {
 	}
 	if o, err := Parse("file:///C:/tools.kpar"); err != nil || o.Source != "/C:/tools.kpar" {
 		t.Errorf("file:///C:/tools.kpar: %v %+v", err, o)
+	}
+}
+
+const hostedURL = "https://dist.example.org/releases/v3.0.0/acme-tools.kpar?format=kpar"
+
+// A hosted .kpar is a download_url purl: version-free identity, canonical
+// form with the version and the sorted checksums, the URL as the source.
+func TestHostedArchive(t *testing.T) {
+	sha := strings.Repeat("ab", 32)
+	enc := "https:%2F%2Fdist.example.org%2Freleases%2Fv3.0.0%2Facme-tools.kpar%3Fformat%3Dkpar"
+	for _, tc := range []struct{ in, canonical, identity, version string }{
+		{"pkg:generic/tools?download_url=" + enc, "pkg:generic/tools?download_url=" + enc, "pkg:generic/tools?download_url=" + enc, ""},
+		{"pkg:generic/tools?download_url=https%3A%2F%2Fdist.example.org%2Freleases%2Fv3.0.0%2Facme-tools.kpar%3Fformat%3Dkpar", "pkg:generic/tools?download_url=" + enc, "pkg:generic/tools?download_url=" + enc, ""},
+		{"pkg:generic/tools@3.0.0?download_url=" + enc + "&checksum=SHA256:" + strings.ToUpper(sha), "pkg:generic/tools@3.0.0?checksum=sha256:" + sha + "&download_url=" + enc, "pkg:generic/tools?download_url=" + enc, "3.0.0"},
+		{"pkg:generic/tools?checksum=sha256:" + sha + "%2Cmd5:" + strings.Repeat("01", 16) + "&download_url=" + enc, "pkg:generic/tools?checksum=md5:" + strings.Repeat("01", 16) + "%2Csha256:" + sha + "&download_url=" + enc, "pkg:generic/tools?download_url=" + enc, ""},
+		{"pkg:generic/tools@1.2.3%2Bci.7?download_url=" + enc, "pkg:generic/tools@1.2.3%2Bci.7?download_url=" + enc, "pkg:generic/tools?download_url=" + enc, "1.2.3+ci.7"},
+		{"pkg:generic/tools@1.2.3+ci.7?download_url=" + enc, "pkg:generic/tools@1.2.3%2Bci.7?download_url=" + enc, "pkg:generic/tools?download_url=" + enc, "1.2.3+ci.7"},
+		{"pkg:generic/Tools%20Model?download_url=http:%2F%2F127.0.0.1:8000%2Fexport", "pkg:generic/Tools%20Model?download_url=http:%2F%2F127.0.0.1:8000%2Fexport", "pkg:generic/Tools%20Model?download_url=http:%2F%2F127.0.0.1:8000%2Fexport", ""},
+	} {
+		o, err := Parse(tc.in)
+		if err != nil {
+			t.Errorf("%s: %v", tc.in, err)
+			continue
+		}
+		if o.Kind != RemoteArchive || !o.Hosted() || o.Canonical() != tc.canonical || o.Identity() != tc.identity || o.Key() != tc.identity || o.Version != tc.version {
+			t.Errorf("%s:\n canonical %s\n want      %s\n identity %s version %q kind %s", tc.in, o.Canonical(), tc.canonical, o.Identity(), o.Version, o.Kind)
+			continue
+		}
+		if strings.HasPrefix(o.Source, "https://") && o.Source != hostedURL {
+			t.Errorf("%s: source %s", tc.in, o.Source)
+		}
+		again, err := Parse(o.Canonical())
+		if err != nil || again.Canonical() != o.Canonical() || again.Identity() != o.Identity() || again.Source != o.Source || again.Version != o.Version || len(again.Checksums) != len(o.Checksums) {
+			t.Errorf("%s: canonical form does not round-trip: %v %+v", tc.in, err, again)
+		}
+	}
+	o, _ := Parse("pkg:generic/tools?download_url=" + enc + "&checksum=sha256:" + sha)
+	if len(o.Checksums) != 1 || o.Checksums[0].Algorithm != "sha256" || o.Checksums[0].Value != sha {
+		t.Errorf("checksums %+v", o.Checksums)
+	}
+	plain, _ := Parse(hostedURL[:strings.Index(hostedURL, "?")])
+	if plain.Hosted() || plain.Identity() != plain.Source || len(plain.Checksums) != 0 {
+		t.Errorf("a plain .kpar IRI is not a hosted purl: %+v", plain)
+	}
+}
+
+func TestHostedArchiveRefusals(t *testing.T) {
+	sha := strings.Repeat("ab", 32)
+	enc := "https:%2F%2Fdist.example.org%2Facme-tools.kpar"
+	for _, tc := range []struct{ in, want string }{
+		{"pkg:generic/tools?download_url=" + enc + "&vcs_url=git%2Bhttps:%2F%2Fgithub.com%2Facme%2Ftools", "vcs_url and download_url exclude each other"},
+		{"pkg:generic/tools?checksum=sha256:" + sha, "a checksum qualifier needs a download_url"},
+		{"pkg:generic/tools?vcs_url=git%2Bhttps:%2F%2Fgithub.com%2Facme%2Ftools&checksum=sha256:" + sha, "only verified with download_url"},
+		{"pkg:generic/tools?download_url=" + enc + "&download_url=" + enc, "exactly one non-empty download_url qualifier"},
+		{"pkg:generic/tools?download_url=", "exactly one non-empty download_url qualifier"},
+		{"pkg:generic/tools?download_url=" + enc + "&checksum=", "exactly one non-empty checksum qualifier"},
+		{"pkg:generic/tools?download_url=" + enc + "&checksum=sha256:" + sha + "&checksum=md5:" + strings.Repeat("01", 16), "exactly one non-empty checksum qualifier"},
+		{"pkg:generic/tools?download_url=" + enc + "&checksum=crc32:deadbeef", `checksum algorithm "crc32" is not supported`},
+		{"pkg:generic/tools?download_url=" + enc + "&checksum=sha256:abcd", "a sha256 value is 64 hex digits"},
+		{"pkg:generic/tools?download_url=" + enc + "&checksum=" + sha, "is not <algorithm>:<hex>"},
+		{"pkg:generic/tools?download_url=ftp:%2F%2Fdist.example.org%2Ftools.kpar", "is not an http(s) URL"},
+		{"pkg:generic/tools?download_url=dist.example.org%2Ftools.kpar", "is not an http(s) URL"},
+		{"pkg:generic/tools?download_url=https:%2F%2Fuser:pw%40dist.example.org%2Ftools.kpar", "credentials in download_url are not supported"},
+		{"pkg:generic/tools?download_url=" + enc + "%23sub", "a .kpar cannot have a #<subpath>"},
+		{"pkg:generic/tools?download_url=" + enc + "#sub", "a .kpar cannot have a #<subpath>"},
+		{"pkg:generic/acme/tools?download_url=" + enc, "takes no namespace"},
+		{"pkg:generic/tools@three?download_url=" + enc, `"three" is not a semantic version`},
+		{"pkg:generic/tools?download_url=" + enc + "&arch=x", `qualifier "arch" is not supported; vcs_url, download_url and checksum are`},
+	} {
+		if _, err := Parse(tc.in); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: got %v, want %q", tc.in, err, tc.want)
+		}
 	}
 }

@@ -62,6 +62,10 @@ type resolver struct {
 	old    *lock.Lock
 	fresh  *lock.Lock
 	chosen map[string]*lock.Entry // identity -> entry resolved in this run
+	// sums holds, per archive identity, the digests of its bytes known in
+	// this run (the lock's SHA-256, the checksums verified on download or
+	// against the installed copy), so a second usage is held to them too.
+	sums   map[string]map[string]string
 	queue  []request
 	res    *Result
 	libDir string
@@ -117,7 +121,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		old = lock.New()
 	}
 	keyResources(old)
-	r := &resolver{ctx: ctx, opts: opts, proj: proj, old: old, fresh: lock.New(), chosen: map[string]*lock.Entry{}, res: &Result{}, libDir: filepath.Join(root, project.LibDir), slots: map[string]slot{}}
+	r := &resolver{ctx: ctx, opts: opts, proj: proj, old: old, fresh: lock.New(), chosen: map[string]*lock.Entry{}, sums: map[string]map[string]string{}, res: &Result{}, libDir: filepath.Join(root, project.LibDir), slots: map[string]slot{}}
 	for _, u := range proj.Usage {
 		c, err := usageConstraint(u)
 		if err != nil {
@@ -269,6 +273,15 @@ func (r *resolver) resolve(req request) error {
 			v, _ := version.Parse(e.Version)
 			if !req.constraint.Check(v) {
 				return fmt.Errorf("%s: usage %q wants %s but %s is already resolved to %s (required by another usage)", req.requester, req.resource, req.constraint, id, e.Version)
+			}
+		}
+		if e.Kind == lock.KindArchive {
+			checked, err := r.verifyDeclared(o, e)
+			if err == nil && !checked {
+				err = fmt.Errorf("the declared %s checksum cannot be verified: the archive is not installed", unverified(o, r.sums[id]))
+			}
+			if err != nil {
+				return fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
 			}
 		}
 		return nil
@@ -440,8 +453,7 @@ func (r *resolver) reuseLocked(old *lock.Entry) (*lock.Entry, bool, error) {
 	if old == nil {
 		return nil, false, nil
 	}
-	stem := (&project.Project{Name: old.Name, Publisher: old.Publisher, Version: old.Version}).InstallName()
-	dst := filepath.Join(r.libDir, stem+project.ArchiveExt)
+	dst := r.lockedArchivePath(old)
 	cur, err := digest.File(dst)
 	if r.opts.LockOnly || (err == nil && cur == old.SHA256) {
 		if !r.opts.LockOnly {
@@ -455,6 +467,83 @@ func (r *resolver) reuseLocked(old *lock.Entry) (*lock.Entry, bool, error) {
 		return &e, true, r.requeueLocked(&e, old)
 	}
 	return nil, false, nil
+}
+
+// verifyDeclared holds the archive an entry records to the checksums a
+// hosted usage declares: against the digests known this run, else against
+// the installed or staged copy. It reports whether every item was checked.
+func (r *resolver) verifyDeclared(o *origin.Origin, e *lock.Entry) (bool, error) {
+	if len(o.Checksums) == 0 {
+		return true, nil
+	}
+	known := r.known(o.Identity())
+	known["sha256"] = e.SHA256
+	if err := digest.Compare(o.Checksums, known); err != nil {
+		return false, err
+	}
+	var unchecked []digest.Checksum
+	for _, c := range o.Checksums {
+		if _, ok := known[c.Algorithm]; !ok {
+			unchecked = append(unchecked, c)
+		}
+	}
+	if len(unchecked) == 0 {
+		return true, nil
+	}
+	file := r.archiveFile(e)
+	if file == "" {
+		return false, nil
+	}
+	// A copy that is not the locked archive (damaged, say) is no witness; the
+	// download replaces it and is checked instead.
+	got, err := digest.Sums(file, append(unchecked, digest.Checksum{Algorithm: "sha256", Value: e.SHA256}))
+	if err != nil || got["sha256"] != e.SHA256 {
+		return false, err
+	}
+	for algo, v := range got {
+		known[algo] = v
+	}
+	return true, digest.Compare(unchecked, got)
+}
+
+// known is the digest map of an archive identity, created on first use.
+func (r *resolver) known(id string) map[string]string {
+	if r.sums[id] == nil {
+		r.sums[id] = map[string]string{}
+	}
+	return r.sums[id]
+}
+
+// unverified names the declared algorithms no digest is known for.
+func unverified(o *origin.Origin, known map[string]string) string {
+	var out []string
+	for _, c := range o.Checksums {
+		if _, ok := known[c.Algorithm]; !ok {
+			out = append(out, c.Algorithm)
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
+// archiveFile is the staged or installed copy of a locked archive, "" when
+// there is none to read.
+func (r *resolver) archiveFile(e *lock.Entry) string {
+	dst := r.lockedArchivePath(e)
+	for _, it := range r.items {
+		if it.dst == dst {
+			return it.src
+		}
+	}
+	if _, err := os.Stat(dst); err == nil {
+		return dst
+	}
+	return ""
+}
+
+// lockedArchivePath is where a locked archive entry is installed under lib/.
+func (r *resolver) lockedArchivePath(old *lock.Entry) string {
+	stem := (&project.Project{Name: old.Name, Publisher: old.Publisher, Version: old.Version}).InstallName()
+	return filepath.Join(r.libDir, stem+project.ArchiveExt)
 }
 
 // requeueLocked queues the usages a locked entry recorded — as declared, so
@@ -527,8 +616,18 @@ func (r *resolver) download(url string, dst string) error {
 func (r *resolver) resolveRemoteArchive(o *origin.Origin, req request) (*lock.Entry, error) {
 	id := o.Identity()
 	old := r.locked(id, req.constraint)
-	if e, ok, err := r.reuseLocked(old); ok || err != nil {
-		return e, err
+	// A locked entry is reused only when every declared checksum was checked
+	// against it or the installed copy; otherwise the download checks them.
+	if old != nil {
+		checked, err := r.verifyDeclared(o, old)
+		if err != nil {
+			return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
+		}
+		if checked {
+			if e, ok, err := r.reuseLocked(old); ok || err != nil {
+				return e, err
+			}
+		}
 	}
 	tmp, err := os.MkdirTemp("", "syspi-dl-*")
 	if err != nil {
@@ -539,6 +638,11 @@ func (r *resolver) resolveRemoteArchive(o *origin.Origin, req request) (*lock.En
 	if err := r.download(o.Source, file); err != nil {
 		return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
 	}
+	// The declared checksums are checked before the archive is opened, so no
+	// member of a tampered download is read.
+	if err := digest.Verify(file, o.Checksums); err != nil {
+		return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
+	}
 	a, err := project.OpenArchive(file)
 	if err != nil {
 		return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
@@ -546,6 +650,14 @@ func (r *resolver) resolveRemoteArchive(o *origin.Origin, req request) (*lock.En
 	defer a.Close()
 	if old != nil && old.SHA256 != a.SHA256 {
 		return nil, fmt.Errorf("%s: usage %q: downloaded archive SHA-256 %s does not match the lock's %s", req.requester, req.resource, a.SHA256, old.SHA256)
+	}
+	if o.Hosted() && a.Project.Name != o.Name {
+		return nil, fmt.Errorf("%s: usage %q: the purl names %q but the archive's %s names %q", req.requester, req.resource, o.Name, project.ProjectFile, a.Project.Name)
+	}
+	known := r.known(id)
+	known["sha256"] = a.SHA256
+	for _, c := range o.Checksums {
+		known[c.Algorithm] = c.Value
 	}
 	v, _ := version.Parse(a.Project.Version)
 	if !req.constraint.Check(v) {

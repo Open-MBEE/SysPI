@@ -103,8 +103,12 @@ func ReadMeta(dir string) (m *Meta, ok bool, err error) {
 // Marshal renders the metadata as indented JSON with sorted object keys and
 // a trailing newline.
 func (m *Meta) Marshal() []byte {
-	data, _ := json.MarshalIndent(m, "", "  ")
-	return append(data, '\n')
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	enc.Encode(m)
+	return buf.Bytes()
 }
 
 // Write writes <dir>/.meta.json.
