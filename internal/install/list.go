@@ -53,6 +53,9 @@ func List(root string) ([]Listing, error) {
 		if p := libPath(libDir, e); p != "" {
 			li.Path = rel(root, p)
 			_, err := os.Lstat(p)
+			if err != nil && !os.IsNotExist(err) {
+				return nil, err
+			}
 			present := err == nil
 			li.Installed = &present
 		}

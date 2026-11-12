@@ -87,6 +87,16 @@ func TestList(t *testing.T) {
 		}
 	}
 
+	// A copy that cannot be looked at is an error, not "missing".
+	if os.Getuid() != 0 {
+		os.Chmod(filepath.Join(dir, "lib"), 0o000)
+		_, err = List(dir)
+		os.Chmod(filepath.Join(dir, "lib"), 0o755)
+		if err == nil {
+			t.Fatal("unreadable lib/ listed without an error")
+		}
+	}
+
 	// A copy that is gone is reported missing, not an error.
 	os.RemoveAll(filepath.Join(dir, "lib", "acme-widgets_1.1.0"))
 	os.Remove(filepath.Join(dir, "lib", "acme-tools_3.1.0.kpar"))
