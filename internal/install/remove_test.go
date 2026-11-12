@@ -129,3 +129,65 @@ func TestRemoveArchiveAndSeveralAtOnce(t *testing.T) {
 		t.Fatalf("lib/ after: %s", got)
 	}
 }
+
+// A lock whose names would place a copy anywhere but directly under lib/
+// names nothing prune may touch.
+func TestLibPathStaysUnderLib(t *testing.T) {
+	lib := filepath.Join(t.TempDir(), "lib")
+	for _, e := range []lock.Entry{
+		{Kind: lock.KindVCS, Name: "x", Version: "../../etc"},
+		{Kind: lock.KindVCS, Name: "x", Version: "1.0.0/../.."},
+		{Kind: lock.KindVCS, Name: "x", Version: `1.0.0\..\..`},
+		{Kind: lock.KindArchive, Name: "x", Version: "a/b"},
+		{Kind: lock.KindLocal, Name: "dev", Version: "0.0.1"},
+		{Kind: lock.KindStandard, Name: "Systems-Library.kpar"},
+	} {
+		if p := libPath(lib, &e); p != "" {
+			t.Errorf("%+v: %q", e, p)
+		}
+	}
+	if p := libPath(lib, &lock.Entry{Kind: lock.KindVCS, Publisher: "acme", Name: "widgets", Version: "1.0.0"}); p != filepath.Join(lib, "acme-widgets_1.0.0") {
+		t.Errorf("plain entry: %q", p)
+	}
+}
+
+func TestRemoveKeepsWhatPruneMustNotTouch(t *testing.T) {
+	widgets, base := fixture(t)
+	wres := "git+file://" + filepath.ToSlash(widgets)
+	bres := "git+file://" + filepath.ToSlash(base)
+
+	// A repository the user started inside an installed copy is not deleted with it.
+	dir := consumer(t, project.Usage{Resource: wres, VersionConstraint: "~1.1.0"}, project.Usage{Resource: bres, VersionConstraint: "^2.1.0"})
+	run(t, dir, Options{})
+	write(t, dir, "lib/acme-widgets_1.1.0/.git/HEAD", "ref: refs/heads/main\n")
+	res, log := remove(t, dir, Options{Offline: true}, wres)
+	if len(res.Pruned) != 0 || !strings.Contains(log, "kept lib/acme-widgets_1.1.0: it holds repository metadata (.git)") {
+		t.Fatalf("pruned %v\n%s", res.Pruned, log)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "lib", "acme-widgets_1.1.0", ".git", "HEAD")); err != nil {
+		t.Fatal(err)
+	}
+
+	// A local usage pointing inside an installed copy keeps that copy.
+	dir = consumer(t, project.Usage{Resource: wres, VersionConstraint: "~1.1.0"}, project.Usage{Resource: bres, VersionConstraint: "^2.1.0"})
+	run(t, dir, Options{})
+	inner := filepath.Join(dir, "lib", "acme-widgets_1.1.0", "packages", "gears")
+	p, _ := project.ReadProject(dir)
+	p.Usage = append(p.Usage, project.Usage{Resource: inner})
+	p.Write(dir)
+	run(t, dir, Options{})
+	res, log = remove(t, dir, Options{Offline: true}, wres)
+	if len(res.Pruned) != 0 || !strings.Contains(log, "kept lib/acme-widgets_1.1.0: the local directory "+inner+", still locked, is inside it") {
+		t.Fatalf("pruned %v\n%s", res.Pruned, log)
+	}
+	if _, err := os.Stat(filepath.Join(inner, "Gears.sysml")); err != nil {
+		t.Fatal(err)
+	}
+
+	// No logger: a removal whose usage another package still needs does not panic.
+	dir = consumer(t, project.Usage{Resource: wres, VersionConstraint: "~1.1.0"}, project.Usage{Resource: bres, VersionConstraint: "^2.1.0"})
+	run(t, dir, Options{})
+	if _, err := Remove(context.Background(), Options{Root: dir, Offline: true}, []string{bres}); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -5,10 +5,13 @@ package install
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
+	"github.com/Open-MBEE/SysPI/internal/digest"
 	"github.com/Open-MBEE/SysPI/internal/lock"
 	"github.com/Open-MBEE/SysPI/internal/origin"
 	"github.com/Open-MBEE/SysPI/internal/project"
@@ -24,6 +27,9 @@ func Remove(ctx context.Context, opts Options, resources []string) (*Result, err
 		return nil, err
 	}
 	opts.Root = root
+	if opts.Log == nil {
+		opts.Log = io.Discard
+	}
 	proj, err := project.ReadProject(root)
 	if err != nil {
 		return nil, err
@@ -122,9 +128,16 @@ func joinSorted(s []string) string {
 // only a leftover the next pruning run removes, never an inconsistency.
 func (r *resolver) prune() {
 	claimed := map[string]bool{}
+	var local []string
 	for i := range r.fresh.Packages {
-		if p := libPath(r.libDir, &r.fresh.Packages[i]); p != "" {
+		e := &r.fresh.Packages[i]
+		if p := libPath(r.libDir, e); p != "" {
 			claimed[p] = true
+		}
+		if e.Kind == lock.KindLocal {
+			if abs, err := filepath.Abs(e.Source); err == nil {
+				local = append(local, abs)
+			}
 		}
 	}
 	for i := range r.old.Packages {
@@ -140,6 +153,14 @@ func (r *resolver) prune() {
 			r.logf("kept %s: its contents differ from the lock entry that installed it", rel(r.opts.Root, p))
 			continue
 		}
+		if by := localWithin(p, local); by != "" {
+			r.logf("kept %s: the local directory %s, still locked, is inside it", rel(r.opts.Root, p), by)
+			continue
+		}
+		if dirs, err := digest.MetadataDirs(p); err != nil || len(dirs) > 0 {
+			r.logf("kept %s: it holds repository metadata (%s) the lock does not record", rel(r.opts.Root, p), strings.Join(dirs, ", "))
+			continue
+		}
 		if err := os.RemoveAll(p); err != nil {
 			r.logf("kept %s (%s %s is no longer used): %v", rel(r.opts.Root, p), e.Name, e.Version, err)
 			continue
@@ -148,4 +169,14 @@ func (r *resolver) prune() {
 		r.res.Pruned = append(r.res.Pruned, rel(r.opts.Root, p))
 	}
 	sort.Strings(r.res.Pruned)
+}
+
+// localWithin names the first of the local directories that is p or lies under it.
+func localWithin(p string, local []string) string {
+	for _, l := range local {
+		if r, err := filepath.Rel(p, l); err == nil && r != ".." && !strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+			return l
+		}
+	}
+	return ""
 }
