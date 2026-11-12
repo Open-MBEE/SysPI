@@ -640,9 +640,25 @@ func TestHostedArchive(t *testing.T) {
 		t.Fatalf("offline with two checksums %+v", res3)
 	}
 	rewrite(t, dir, project.Usage{Resource: wrong})
-	runErr(t, dir, Options{Offline: true}, "the lock records "+sum)
+	runErr(t, dir, Options{Offline: true}, "checksum mismatch: the resource declares sha256 "+strings.Repeat("00", 32)+", the archive has "+sum)
 	rewrite(t, dir, project.Usage{Resource: id + "&checksum=sha1:" + strings.Repeat("00", 20)})
 	runErr(t, dir, Options{Offline: true}, "checksum mismatch: the resource declares sha1 "+strings.Repeat("00", 20))
+	// A second usage of the same archive is held to its own checksums, even
+	// when the first already resolved it.
+	other := t.TempDir()
+	write(t, other, ".project.json", `{"name":"dev","version":"0.0.1","usage":[{"resource":"`+wrong+`"}]}`)
+	runErr(t, consumer(t, project.Usage{Resource: good}, project.Usage{Resource: other}), Options{}, "checksum mismatch: the resource declares sha256 "+strings.Repeat("00", 32)+", the archive has "+sum)
+	write(t, other, ".project.json", `{"name":"dev","version":"0.0.1","usage":[{"resource":"`+id+"&checksum=sha1:"+strings.Repeat("00", 20)+`"}]}`)
+	runErr(t, consumer(t, project.Usage{Resource: good}, project.Usage{Resource: other}), Options{}, "checksum mismatch: the resource declares sha1 "+strings.Repeat("00", 20)+", the archive has "+sha1sum)
+	// A lock-only run on a fresh clone cannot check a sha1 against the lock,
+	// so it downloads the archive to check it rather than trusting the lock.
+	clone := consumer(t, project.Usage{Resource: id + "&checksum=sha1:" + strings.Repeat("00", 20)})
+	write(t, clone, project.LockFile, string(readFile(t, filepath.Join(dir, project.LockFile))))
+	runErr(t, clone, Options{LockOnly: true}, "checksum mismatch: the resource declares sha1 "+strings.Repeat("00", 20)+", the archive has "+sha1sum)
+	rewrite(t, clone, project.Usage{Resource: id + "&checksum=sha1:" + sha1sum})
+	if res, _ := run(t, clone, Options{LockOnly: true}); res.Lock.Find(id) == nil || res.Lock.Find(id).SHA256 != sum {
+		t.Fatalf("lock-only with a sha1 %+v", res.Lock.Find(id))
+	}
 
 	// Without a checksum the download is trusted as a plain IRI is; the lock still pins its digest.
 	plain := consumer(t, project.Usage{Resource: id})
@@ -656,6 +672,16 @@ func TestHostedArchive(t *testing.T) {
 	runErr(t, consumer(t, project.Usage{Resource: "pkg:generic/widgets?download_url=" + enc}), Options{}, `the purl names "widgets" but the archive's .project.json names "tools"`)
 	// Offline without the archive installed refuses as the plain IRI does.
 	runErr(t, consumer(t, project.Usage{Resource: good}), Options{Offline: true}, "offline: "+srv.URL+"/release.kpar is not installed")
+}
+
+// readFile reads a file or fails the test.
+func readFile(t *testing.T, p string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 // rewrite replaces the consumer's usages.
