@@ -116,7 +116,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if old == nil {
 		old = lock.New()
 	}
-	keyResources(old)
+	if err := keyResources(old); err != nil {
+		return nil, err
+	}
 	r := &resolver{ctx: ctx, opts: opts, proj: proj, old: old, fresh: lock.New(), chosen: map[string]*lock.Entry{}, res: &Result{}, libDir: filepath.Join(root, project.LibDir), slots: map[string]slot{}}
 	for _, u := range proj.Usage {
 		c, err := usageConstraint(u)
@@ -472,20 +474,21 @@ func (r *resolver) requeueLocked(e *lock.Entry, old *lock.Entry) error {
 	return nil
 }
 
-// keyResources rewrites each lock resource to its matching key, so a lock
-// written in an older or differently suffixed spelling still matches its usage.
-func keyResources(l *lock.Lock) {
-	for i := range l.Packages {
-		l.Packages[i].Resource = lockKey(l.Packages[i].Resource)
+// keyResources rewrites each repository resource to its key, so an entry and a
+// usage match however the .git suffix was spelled. Any other spelling is not an
+// identity this tool writes, and the lock is refused rather than guessed at.
+func keyResources(l *lock.Lock) error {
+	for i, e := range l.Packages {
+		o, err := origin.Parse(e.Resource)
+		if err != nil || o.Kind != origin.VCS {
+			continue
+		}
+		if id := o.Identity(); id != e.Resource {
+			return fmt.Errorf("%s: packages[%d] resource %s is not canonical (this tool writes %s); delete the lock and run syspi lock", project.LockFile, i, e.Resource, id)
+		}
+		l.Packages[i].Resource = o.Key()
 	}
-}
-
-// lockKey is origin.Key for a repository resource and the resource itself otherwise.
-func lockKey(resource string) string {
-	if o, err := origin.Parse(resource); err == nil && o.Kind == origin.VCS {
-		return o.Key()
-	}
-	return resource
+	return nil
 }
 
 func (r *resolver) download(url string, dst string) error {

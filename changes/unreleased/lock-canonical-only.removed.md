@@ -1,0 +1,1 @@
+- A `.project.lock.json` is read exactly as this tool writes it: a repository `resource` in a non-canonical spelling (`pkg:git/…`, a bare `<vcs>+<transport>://…`) or a `usage` given as a bare string is refused with the canonical form, instead of being translated as pre-release locks were.

@@ -4,6 +4,8 @@ package lock
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -56,5 +58,37 @@ func TestDeterministicRoundTrip(t *testing.T) {
 		if _, err := Parse([]byte(bad)); err == nil {
 			t.Errorf("Parse(%s) accepted", bad)
 		}
+	}
+}
+
+func TestParseRejectsStringUsages(t *testing.T) {
+	_, err := Parse([]byte(`{"lockVersion":1,"packages":[{"resource":"pkg:generic/app?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fapp","kind":"vcs","name":"app","version":"1.0.0","usage":["pkg:generic/core?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fcore%401.2.0"]}]}`))
+	if err == nil || !strings.Contains(err.Error(), "lock:") {
+		t.Fatalf("a bare usage string must be refused, got %v", err)
+	}
+}
+
+func TestWriteThroughSymlink(t *testing.T) {
+	root := t.TempDir()
+	shared := filepath.Join(root, "shared.lock.json")
+	os.WriteFile(shared, []byte("{}"), 0o644)
+	dir := filepath.Join(root, "a")
+	os.Mkdir(dir, 0o755)
+	if err := os.Symlink(shared, filepath.Join(dir, "lock.json")); err != nil {
+		t.Skip(err)
+	}
+	l := New()
+	l.Packages = append(l.Packages, Entry{Resource: "pkg:git/example.org/core", Kind: KindVCS, Name: "core", Version: "1.0.0"})
+	if wrote, err := l.Write(dir, "lock.json"); err != nil || !wrote {
+		t.Fatal(wrote, err)
+	}
+	if fi, err := os.Lstat(filepath.Join(dir, "lock.json")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("the symlink must be kept")
+	}
+	if got, _ := os.ReadFile(shared); string(got) != string(l.Marshal()) {
+		t.Fatalf("target not updated:\n%s", got)
+	}
+	if left, _ := filepath.Glob(filepath.Join(root, ".*")); len(left) != 0 {
+		t.Fatalf("temporary files left: %v", left)
 	}
 }
