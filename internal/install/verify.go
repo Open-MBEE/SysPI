@@ -13,6 +13,7 @@ import (
 	"github.com/Open-MBEE/SysPI/internal/lock"
 	"github.com/Open-MBEE/SysPI/internal/origin"
 	"github.com/Open-MBEE/SysPI/internal/project"
+	"github.com/Open-MBEE/SysPI/internal/version"
 )
 
 // Discrepancy is one way the project disagrees with its lock: an installed
@@ -56,32 +57,56 @@ func Verify(root string) ([]Discrepancy, int, error) {
 	sort.Slice(l.Packages, func(i, j int) bool { return l.Packages[i].Resource < l.Packages[j].Resource })
 	var out []Discrepancy
 	for _, u := range proj.Usage {
-		o, err := origin.Parse(u.Resource)
-		if err != nil {
-			out = append(out, Discrepancy{Resource: u.Resource, Problem: err.Error()})
-			continue
-		}
-		if lockedEntry(l, o) == nil {
-			out = append(out, Discrepancy{Resource: u.Resource, Problem: "usage of " + project.ProjectFile + " has no lock entry; run syspi lock"})
-		}
+		out = append(out, verifyUsage(l, project.ProjectFile, "usage of "+project.ProjectFile, u)...)
 	}
 	libDir := filepath.Join(root, project.LibDir)
 	for i := range l.Packages {
 		e := &l.Packages[i]
+		for _, u := range e.Usage {
+			out = append(out, verifyUsage(l, e.Resource, "usage of "+e.Resource, project.Usage{Resource: u.Resource, VersionConstraint: u.VersionConstraint})...)
+		}
 		switch e.Kind {
 		case lock.KindVCS:
 			out = append(out, verifyTree(root, libPath(libDir, e), e)...)
 		case lock.KindArchive:
 			out = append(out, verifyArchive(root, libPath(libDir, e), e)...)
 		case lock.KindLocal:
-			out = append(out, verifyLocal(e)...)
+			out = append(out, verifyLocal(root, e)...)
 		}
 	}
 	return out, len(l.Packages), nil
 }
 
+// verifyUsage checks that a declared usage — of the project, or of a locked
+// package — has a lock entry at a version its constraint accepts.
+func verifyUsage(l *lock.Lock, requester, what string, u project.Usage) []Discrepancy {
+	at := func(problem string) []Discrepancy {
+		return []Discrepancy{{Resource: requester, Problem: what + " " + u.Resource + ": " + problem}}
+	}
+	o, err := origin.Parse(u.Resource)
+	if err != nil {
+		return at(err.Error())
+	}
+	e := lockedEntry(l, o)
+	if e == nil {
+		return at("no lock entry; run syspi lock")
+	}
+	c, err := usageConstraint(u)
+	if err != nil {
+		return at(err.Error())
+	}
+	if c.IsZero() || e.Version == "" {
+		return nil
+	}
+	if v, err := version.Parse(e.Version); err != nil || !c.Check(v) {
+		return at("the lock entry is at " + e.Version + ", the usage wants " + c.String())
+	}
+	return nil
+}
+
 // lockedEntry finds the lock entry a usage resolves to: by repository key
-// for a vcs resource, by the resource itself otherwise.
+// and recorded location for a vcs resource (repo and repo.git differ, as
+// the resolver has it), by the resource itself otherwise.
 func lockedEntry(l *lock.Lock, o *origin.Origin) *lock.Entry {
 	if o.Kind != origin.VCS {
 		return l.Find(o.Identity())
@@ -91,7 +116,7 @@ func lockedEntry(l *lock.Lock, o *origin.Origin) *lock.Entry {
 		if e.Kind != lock.KindVCS {
 			continue
 		}
-		if eo, err := origin.Parse(e.Resource); err == nil && eo.Key() == o.Key() {
+		if eo, err := origin.Parse(e.Resource); err == nil && eo.Key() == o.Key() && (e.Source == "" || locationKey(e.Source) == locationKey(o.Source)) {
 			return e
 		}
 	}
@@ -156,14 +181,20 @@ func verifyArchive(root, file string, e *lock.Entry) []Discrepancy {
 	return append(out, verifyProject(at, a.Project, e)...)
 }
 
-func verifyLocal(e *lock.Entry) []Discrepancy {
+// verifyLocal reads the local directory as the resolver does: a relative
+// source is relative to the project root.
+func verifyLocal(root string, e *lock.Entry) []Discrepancy {
+	dir := e.Source
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(root, filepath.FromSlash(dir))
+	}
 	at := func(problem string) Discrepancy {
 		return Discrepancy{Resource: e.Resource, Path: e.Source, Problem: problem}
 	}
-	if st, err := os.Stat(e.Source); err != nil || !st.IsDir() {
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		return []Discrepancy{at("local directory missing")}
 	}
-	pj, err := project.ReadProject(e.Source)
+	pj, err := project.ReadProject(dir)
 	if err != nil {
 		return []Discrepancy{at(err.Error())}
 	}
