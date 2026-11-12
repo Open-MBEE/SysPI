@@ -47,11 +47,11 @@ func TestList(t *testing.T) {
 	// Resource order: the base repository (git+file:///…/base.git) sorts
 	// before widgets; the standard IRI and the absolute paths sort by their text.
 	want := map[string]bool{
-		"vcs 2.1.0 lib/base_2.1.0 present":                                            true,
-		"vcs 1.1.0 " + filepath.Join("lib", "acme-widgets_1.1.0") + " present":        true,
-		"archive 3.1.0 " + filepath.Join("lib", "acme-tools_3.1.0.kpar") + " present": true,
-		"local 0.0.1  not installed":                                                  true,
-		"standard   not installed":                                                    true,
+		"vcs 2.1.0 lib/base_2.1.0 present":                true,
+		"vcs 1.1.0 lib/acme-widgets_1.1.0 present":        true,
+		"archive 3.1.0 lib/acme-tools_3.1.0.kpar present": true,
+		"local 0.0.1  not installed":                      true,
+		"standard   not installed":                        true,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("listing: %q", got)
@@ -100,7 +100,7 @@ func TestList(t *testing.T) {
 			missing = append(missing, ls[i].Path)
 		}
 	}
-	if strings.Join(missing, ",") != filepath.Join("lib", "acme-tools_3.1.0.kpar")+","+filepath.Join("lib", "acme-widgets_1.1.0") {
+	if strings.Join(missing, ",") != "lib/acme-tools_3.1.0.kpar,lib/acme-widgets_1.1.0" {
 		t.Fatalf("missing: %q", missing)
 	}
 }
