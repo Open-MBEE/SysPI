@@ -60,6 +60,16 @@ func selectUpdates(opts *Options, resources []string) error {
 	return nil
 }
 
+// repositoryKey is what two lock entries for one repository share however
+// the .git suffix was spelled: origin.Key for a repository resource, the
+// resource itself otherwise.
+func repositoryKey(resource string) string {
+	if o, err := origin.Parse(resource); err == nil && o.Kind == origin.VCS {
+		return o.Key()
+	}
+	return resource
+}
+
 // Describe is the one-line report of a change: "name old -> new", "name new (new)"
 // or "name old (dropped)".
 func (c *Change) Describe() string {

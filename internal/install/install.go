@@ -641,7 +641,7 @@ func changes(old, fresh *lock.Lock) []Change {
 	seen := map[string]bool{}
 	for i := range fresh.Packages {
 		e := &fresh.Packages[i]
-		k := lockKey(e.Resource)
+		k := repositoryKey(e.Resource)
 		seen[k] = true
 		c := Change{Resource: e.Resource, Name: e.Name, To: e.Version}
 		if o := old.Find(k); o != nil {
@@ -654,7 +654,7 @@ func changes(old, fresh *lock.Lock) []Change {
 	}
 	for i := range old.Packages {
 		e := &old.Packages[i]
-		if !seen[lockKey(e.Resource)] {
+		if !seen[repositoryKey(e.Resource)] {
 			out = append(out, Change{Resource: e.Resource, Name: e.Name, From: e.Version})
 		}
 	}
