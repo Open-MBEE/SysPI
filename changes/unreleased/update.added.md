@@ -1,0 +1,1 @@
+- `syspi update [<resource>…]` re-resolves the named (or all) usages to the highest version their constraints allow, ignoring the lock — the one command that moves a lock entry — installs, rewrites the lock and removes the copies the moved entries left under `lib/`; `syspi outdated [-json] [<resource>…]` reports what `update` would move (`name old -> new`) and writes nothing.
