@@ -1,0 +1,1 @@
+- `syspi verify` checks every lock entry's installed copy under `lib/` against the lock — `.project.json`, the checksums `.meta.json` records, the tree or `.kpar` SHA-256, the usages it declares — and that every usage of `.project.json` is locked; it prints every discrepancy, exits 1 on any, contacts no repository and writes nothing.
