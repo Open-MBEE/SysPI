@@ -295,7 +295,10 @@ func parseGitAlias(res, tail string) (*Origin, error) {
 // userInAuthority reports whether the last @ of spec lies in its authority,
 // where it ends a user name instead of starting a version.
 func userInAuthority(spec string) bool {
-	_, rest, _ := strings.Cut(spec, "://")
+	scheme, rest, _ := strings.Cut(spec, "://")
+	if scheme == "file" || strings.HasSuffix(scheme, "+file") {
+		return false // no authority: on Windows the path may follow "://" directly
+	}
 	auth, tail, _ := strings.Cut(rest, "/")
 	return strings.Contains(auth, "@") && !strings.Contains(tail, "@")
 }

@@ -250,9 +250,17 @@ func TestDriveLetterFileURIs(t *testing.T) {
 		if o.Path != tc.path || o.Source != tc.src {
 			t.Errorf("windows=%v %s: path %q source %q, want %q %q", tc.windows, tc.in, o.Path, o.Source, tc.path, tc.src)
 		}
+		if o.Version != "1.0.0" {
+			t.Errorf("windows=%v %s: version %q, want 1.0.0", tc.windows, tc.in, o.Version)
+		}
 		if _, err := Parse(o.Canonical()); err != nil {
 			t.Errorf("windows=%v canonical %s: %v", tc.windows, o.Canonical(), err)
 		}
+	}
+	// Backslashes after "://" leave no "/" to end an authority: the @ is still the version's.
+	windowsPaths = true
+	if o, err := Parse(`git+file://C:\srv\widgets@1.0.0`); err != nil || o.Version != "1.0.0" || strings.Contains(o.Source, "@") {
+		t.Errorf(`git+file://C:\srv\widgets@1.0.0: %v %+v`, err, o)
 	}
 	windowsPaths = false
 	if _, err := Parse("file://C:/tools.kpar"); err == nil {
