@@ -5,6 +5,7 @@ package install
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -87,8 +88,9 @@ func TestList(t *testing.T) {
 		}
 	}
 
-	// A copy that cannot be looked at is an error, not "missing".
-	if os.Getuid() != 0 {
+	// A copy that cannot be looked at is an error, not "missing" (file modes
+	// do not deny a stat on Windows, nor to root).
+	if runtime.GOOS != "windows" && os.Getuid() != 0 {
 		os.Chmod(filepath.Join(dir, "lib"), 0o000)
 		_, err = List(dir)
 		os.Chmod(filepath.Join(dir, "lib"), 0o755)
