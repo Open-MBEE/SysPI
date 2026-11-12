@@ -160,9 +160,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		os.RemoveAll(b.src)
 	}
 	if opts.Prune {
-		if err := r.prune(); err != nil {
-			return nil, err
-		}
+		r.prune()
 	}
 	return r.res, nil
 }

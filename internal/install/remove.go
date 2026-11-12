@@ -142,7 +142,9 @@ func installedMatches(p string, e *lock.Entry) bool {
 // prune removes the installed copies the previous lock placed under lib/
 // that the fresh lock no longer claims — only when their contents still
 // match the entry that put them there; anything else under lib/ is kept.
-func (r *resolver) prune() error {
+// It runs after the new lock is written, so a copy it cannot remove is
+// only a leftover the next pruning run removes, never an inconsistency.
+func (r *resolver) prune() {
 	claimed := map[string]bool{}
 	for i := range r.fresh.Packages {
 		if p := libPath(r.libDir, &r.fresh.Packages[i]); p != "" {
@@ -163,11 +165,11 @@ func (r *resolver) prune() error {
 			continue
 		}
 		if err := os.RemoveAll(p); err != nil {
-			return err
+			r.logf("kept %s (%s %s is no longer used): %v", rel(r.opts.Root, p), e.Name, e.Version, err)
+			continue
 		}
-		r.logf("removed %s (%s %s is no longer used)", rel(r.opts.Root, p), e.Name, e.Version)
+		r.logf("%s %s is no longer used; %s removed", e.Name, e.Version, rel(r.opts.Root, p))
 		r.res.Pruned = append(r.res.Pruned, rel(r.opts.Root, p))
 	}
 	sort.Strings(r.res.Pruned)
-	return nil
 }
