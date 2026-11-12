@@ -288,3 +288,35 @@ func checkSums(rel string, data []byte, sums Checksums) error {
 	}
 	return nil
 }
+
+// MismatchedChecksums lists every member whose recorded checksum does not
+// match the file in dir, and every recorded member that is missing — all of
+// them, where VerifyChecksums stops at the first.
+func MismatchedChecksums(dir string, m *Meta) ([]string, error) {
+	members, err := Members(dir)
+	if err != nil {
+		return nil, err
+	}
+	have := map[string]bool{}
+	var bad []string
+	for _, rel := range members {
+		have[rel] = true
+		sums, ok := m.Checksum[rel]
+		if !ok || !sums.Recorded() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil {
+			return nil, err
+		}
+		if err := checkSums(rel, data, sums); err != nil {
+			bad = append(bad, err.Error())
+		}
+	}
+	for _, rel := range sortedKeys(m.Checksum) {
+		if !have[rel] {
+			bad = append(bad, MetaFile+" records a checksum for "+rel+", which is missing")
+		}
+	}
+	return bad, nil
+}
