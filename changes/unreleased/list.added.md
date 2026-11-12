@@ -1,0 +1,1 @@
+- `syspi list [-json]` prints the locked packages in resource order with version, kind or VCS, revision, path under `lib/` and whether that installed copy is present; standard libraries and local directories are listed as recorded but never installed. It reads only the lock and `lib/`.

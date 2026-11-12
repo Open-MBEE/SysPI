@@ -144,6 +144,13 @@ lib/
 The directory name is `<publisher>-<name>_<version>` (`<name>_<version>` without a publisher),
 the convention OpenSysML reads.
 
+`syspi list` prints the lock in resource order — one line per package with its version, kind
+(the VCS of an exported tree), revision, path under `lib/` and whether that copy is present —
+and `syspi list -json` the same as an array of objects (`resource`, `kind`, `publisher`, `name`,
+`version`, `vcs`, `tag`, `revision`, `source`, `path`, `installed`). Standard libraries and local
+directories have no path: they are recorded, never installed. `list` reads only the lock and
+`lib/`; it never contacts a repository.
+
 ## Bundle reproducibility
 
 `syspi bundle` writes members sorted with fixed 1980-01-01 ZIP timestamps and regenerates
