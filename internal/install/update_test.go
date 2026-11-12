@@ -139,3 +139,41 @@ func TestUpdateAndOutdated(t *testing.T) {
 		t.Fatalf("new usage: %v %q", err, describeAll(res.Changes))
 	}
 }
+
+// A dry run sees the destination collision install would refuse, and an
+// entry already at the top keeps its locked tag when another tag of the
+// same version appears.
+func TestOutdatedSeesCollisionsAndKeepsTheLockedTag(t *testing.T) {
+	widgets, base := fixture(t)
+	bres := "git+file://" + filepath.ToSlash(base)
+	twin := t.TempDir()
+	git(t, twin, "init", "-q", "-b", "main")
+	write(t, twin, ".project.json", `{"name":"base","version":"2.1.0"}`+"\n")
+	write(t, twin, "Other.kerml", "package Other;\n")
+	git(t, twin, "add", "-A")
+	git(t, twin, "commit", "-q", "-m", "2.1.0")
+	git(t, twin, "tag", "2.1.0")
+	dir := consumer(t, project.Usage{Resource: bres + "@2.1.0"}, project.Usage{Resource: "git+file://" + filepath.ToSlash(twin) + "@2.1.0"})
+	for _, f := range []func() error{
+		func() error { _, err := Outdated(context.Background(), Options{Root: dir}, nil); return err },
+		func() error { _, err := Run(context.Background(), Options{Root: dir, LockOnly: true}); return err },
+	} {
+		if err := f(); err == nil || !strings.Contains(err.Error(), "both install as lib/base_2.1.0 with different contents") {
+			t.Fatalf("collision not seen: %v", err)
+		}
+	}
+
+	wres := "git+file://" + filepath.ToSlash(widgets)
+	dir = consumer(t, project.Usage{Resource: wres, VersionConstraint: "~1.1.0"})
+	run(t, dir, Options{})
+	// Another tag naming the same version, on the commit without .project.json.
+	git(t, base, "tag", "v2.1.0", "3.0.0")
+	res, err := Update(context.Background(), Options{Root: dir}, nil)
+	if err != nil || len(res.Changes) != 0 || len(res.Installed) != 0 {
+		t.Fatalf("update with a twin tag: %v %+v", err, res)
+	}
+	res, err = Outdated(context.Background(), Options{Root: dir}, nil)
+	if err != nil || len(res.Changes) != 0 {
+		t.Fatalf("outdated with a twin tag: %v %s", err, describeAll(res.Changes))
+	}
+}
