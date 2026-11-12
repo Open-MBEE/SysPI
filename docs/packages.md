@@ -145,7 +145,9 @@ The directory name is `<publisher>-<name>_<version>` (`<name>_<version>` without
 the convention OpenSysML reads.
 
 `syspi verify` checks the project against its lock without contacting a repository and without
-writing anything: every usage of `.project.json` has a lock entry, and every lock entry's
+writing anything: every usage of `.project.json`, and every usage a lock entry recorded, has a
+lock entry at a version its constraint accepts (the same repository at the same location, so
+`repo` and `repo.git` differ as they do for the resolver), and every lock entry's
 installed copy — the exported tree or `.kpar` under `lib/`, the local directory read in place —
 is what the lock recorded: its `.project.json` (publisher, name, version), every checksum its
 `.meta.json` records, the tree hash or `.kpar` SHA-256, and the usages it declares against the

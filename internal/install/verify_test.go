@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Open-MBEE/SysPI/internal/lock"
 	"github.com/Open-MBEE/SysPI/internal/project"
 )
 
@@ -21,7 +22,7 @@ func problems(ds []Discrepancy) string {
 }
 
 func TestVerify(t *testing.T) {
-	widgets, _ := fixture(t)
+	widgets, base := fixture(t)
 	wres := "git+file://" + filepath.ToSlash(widgets)
 	pkg := t.TempDir()
 	write(t, pkg, ".project.json", `{"name":"tools","publisher":"acme","version":"3.1.0"}`)
@@ -58,15 +59,26 @@ func TestVerify(t *testing.T) {
 	os.RemoveAll(editable)
 	p, _ := project.ReadProject(dir)
 	p.Usage = append(p.Usage, project.Usage{Resource: "https://www.omg.org/spec/KerML/20250201/Semantic-Library.kpar"})
+	// The widgets usage now wants a version the lock entry is not at, and a
+	// second spelling of the repository (with .git dropped) names another location.
+	p.Usage[0].VersionConstraint = "^1.2.0"
+	p.Usage = append(p.Usage, project.Usage{Resource: strings.TrimSuffix(wres, ".git") + "@1.1.0"})
 	p.Write(dir)
+	// A locked package's own usage the lock no longer covers.
+	lk, _, _ := lock.Read(dir, project.LockFile)
+	lockedWidgets := lk.Find(ident(t, wres))
+	lk.Put(lock.Entry{Resource: "pkg:generic/other?vcs_url=git%2Bfile:%2F%2F%2Fno%2Fother", Kind: lock.KindVCS, Name: "other", Version: "1.0.0", VCS: "git", Source: "file:///no/other", SHA256: "0", Usage: []lock.Usage{{Resource: "git+file:///no/such", VersionConstraint: "^1.0.0"}, {Resource: "git+file://" + filepath.ToSlash(base), VersionConstraint: "^3.0.0"}}})
+	os.WriteFile(filepath.Join(dir, project.LockFile), lk.Marshal(), 0o644)
+	lockBefore, _ = os.ReadFile(filepath.Join(dir, project.LockFile))
+	_ = lockedWidgets
 
 	ds, n, err = Verify(dir)
-	if err != nil || n != 5 {
+	if err != nil || n != 6 {
 		t.Fatalf("verify: %d checked, %v", n, err)
 	}
 	got := problems(ds)
 	for _, want := range []string{
-		"https://www.omg.org/spec/KerML/20250201/Semantic-Library.kpar: usage of .project.json has no lock entry; run syspi lock",
+		".project.json: usage of .project.json https://www.omg.org/spec/KerML/20250201/Semantic-Library.kpar: no lock entry; run syspi lock",
 		"lib/acme-widgets_1.1.0: tree SHA-256 ",
 		"lib/acme-widgets_1.1.0: checksum mismatch for Widgets.sysml",
 		"lib/base_2.1.0: tree SHA-256 ",
@@ -76,26 +88,36 @@ func TestVerify(t *testing.T) {
 		"lib/acme-tools_3.1.0.kpar: checksum mismatch for ",
 		"lib/base_2.1.0: checksum mismatch for .project.json",
 		editable + ": local directory missing",
+		".project.json: usage of .project.json " + wres + ": the lock entry is at 1.1.0, the usage wants ^1.2.0",
+		".project.json: usage of .project.json " + strings.TrimSuffix(wres, ".git") + "@1.1.0: no lock entry; run syspi lock",
+		"lib/other_1.0.0: installed copy missing",
+		"pkg:generic/other?vcs_url=git%2Bfile:%2F%2F%2Fno%2Fother: usage of pkg:generic/other?vcs_url=git%2Bfile:%2F%2F%2Fno%2Fother git+file:///no/such: no lock entry; run syspi lock",
+		"pkg:generic/other?vcs_url=git%2Bfile:%2F%2F%2Fno%2Fother: usage of pkg:generic/other?vcs_url=git%2Bfile:%2F%2F%2Fno%2Fother git+file://" + filepath.ToSlash(base) + ": the lock entry is at 2.1.0, the usage wants ^3.0.0",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q", want)
 		}
 	}
-	if len(ds) != 10 {
+	if len(ds) != 15 {
 		t.Errorf("%d discrepancies:\n%s", len(ds), got)
 	}
 	// Extra.sysml has no recorded checksum, so only the tree hash tells of it.
 	if strings.Contains(got, "Extra.sysml") {
 		t.Errorf("unrecorded member reported as a checksum problem:\n%s", got)
 	}
-	// The unlocked usage comes first, then the entries in resource order.
-	if ds[0].Path != "" {
-		t.Errorf("first discrepancy is not the unlocked usage: %+v", ds[0])
-	}
-	for i := 2; i < len(ds); i++ {
-		if ds[i-1].Resource > ds[i].Resource {
+	// The project's usages come first, then the entries in resource order.
+	var seenEntry bool
+	for i := range ds {
+		if ds[i].Resource == project.ProjectFile {
+			if seenEntry {
+				t.Errorf("project usage after an entry: %+v", ds[i])
+			}
+			continue
+		}
+		if seenEntry && ds[i-1].Resource > ds[i].Resource {
 			t.Errorf("not in resource order: %q after %q", ds[i].Resource, ds[i-1].Resource)
 		}
+		seenEntry = true
 	}
 	if lockAfter, _ := os.ReadFile(filepath.Join(dir, project.LockFile)); string(lockAfter) != string(lockBefore) {
 		t.Error("verify wrote the lock")
@@ -112,5 +134,21 @@ func TestVerify(t *testing.T) {
 	got = problems(ds)
 	if !strings.Contains(got, "lib/base_2.1.0: installed copy missing") || !strings.Contains(got, "lib/acme-widgets_1.1.0: .meta.json missing") {
 		t.Errorf("after removals:\n%s", got)
+	}
+}
+
+// A relative local directory is read from the project root, as the resolver reads it.
+func TestVerifyRelativeLocalDir(t *testing.T) {
+	dir := consumer(t, project.Usage{Resource: "pkgs/dev"})
+	write(t, dir, "pkgs/dev/.project.json", `{"name":"dev","version":"0.0.1"}`)
+	run(t, dir, Options{})
+	wd, _ := os.Getwd()
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(wd)
+	ds, _, err := Verify(dir)
+	if err != nil || len(ds) != 0 {
+		t.Fatalf("%v\n%s", err, problems(ds))
 	}
 }
