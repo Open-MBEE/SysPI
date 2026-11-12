@@ -379,12 +379,12 @@ func (r *resolver) archivePath(p *project.Project) string {
 // installArchive stages a verified archive for lib/ unless an identical
 // copy is already there, and queues its usages.
 func (r *resolver) installArchive(e *lock.Entry, a *project.Archive, src string) error {
-	if r.opts.LockOnly {
-		return r.enqueueUsages(e, a.Project)
-	}
 	dst := r.archivePath(a.Project)
 	if err := r.claim(dst, e.Resource, a.SHA256); err != nil {
 		return err
+	}
+	if r.opts.LockOnly {
+		return r.enqueueUsages(e, a.Project)
 	}
 	if cur, err := digest.File(dst); (err == nil && cur == a.SHA256) || r.alreadyStaged(dst) {
 		r.res.Reused = append(r.res.Reused, e.Resource)
@@ -484,10 +484,10 @@ func (r *resolver) reuseLocked(old *lock.Entry) (*lock.Entry, bool, error) {
 	dst := filepath.Join(r.libDir, stem+project.ArchiveExt)
 	cur, err := digest.File(dst)
 	if r.opts.LockOnly || (err == nil && cur == old.SHA256) {
+		if err := r.claim(dst, old.Resource, old.SHA256); err != nil {
+			return nil, false, err
+		}
 		if !r.opts.LockOnly {
-			if err := r.claim(dst, old.Resource, old.SHA256); err != nil {
-				return nil, false, err
-			}
 			r.res.Reused = append(r.res.Reused, old.Resource)
 		}
 		e := *old
@@ -689,6 +689,9 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 		}
 		if sel.Version.String() != old.Version {
 			old = nil
+		} else {
+			// Already at the top: the locked tag, not another spelling of the same version.
+			sel = vcs.Version{Tag: old.Tag, Version: sel.Version}
 		}
 	}
 	if old != nil && !r.opts.LockOnly {
@@ -705,6 +708,9 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 		}
 	}
 	if old != nil && r.opts.LockOnly {
+		if err := r.claim(treePath(r.libDir, &project.Project{Name: old.Name, Publisher: old.Publisher, Version: old.Version}), id, old.SHA256); err != nil {
+			return nil, err
+		}
 		e := *old
 		e.Resource, e.Source, e.Usage = id, o.Source, nil
 		return &e, r.requeueLocked(&e, old)
@@ -790,6 +796,10 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 		return nil, fmt.Errorf("%s: usage %q: tag %s of %s exports tree SHA-256 %s, the lock recorded %s", req.requester, req.resource, sel.Tag, o.Source, sum, old.SHA256)
 	}
 	e := &lock.Entry{Resource: id, Kind: lock.KindVCS, Publisher: p.Publisher, Name: p.Name, Version: p.Version, VCS: o.VCS, Source: o.Source, Tag: sel.Tag, Revision: revision, SHA256: sum, MetaGenerated: !hasMeta}
+	dst := treePath(r.libDir, p)
+	if err := r.claim(dst, id, sum); err != nil {
+		return nil, err
+	}
 	if r.opts.LockOnly {
 		return e, r.enqueueUsages(e, p)
 	}
@@ -802,10 +812,6 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 			return nil, err
 		}
 		r.logf("%s %s: tag %s has no %s; generated one for the installed copy", p.Name, p.Version, sel.Tag, project.MetaFile)
-	}
-	dst := treePath(r.libDir, p)
-	if err := r.claim(dst, id, sum); err != nil {
-		return nil, err
 	}
 	if r.alreadyStaged(dst) {
 		r.res.Reused = append(r.res.Reused, id)
