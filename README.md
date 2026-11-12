@@ -10,14 +10,18 @@ what package managers install.
 ## The contract, on one screen
 
 - **Identity** — an ECMA-427 Package-URL of type `generic` with the Annex B.3.5 `vcs_url`
-  qualifier: `pkg:generic/<name>?vcs_url=<vcs>+<transport>://<host>/<path>[@<version>][#<subpath>]`,
+  qualifier: `pkg:generic/<name>?vcs_url=<vcs>+<transport>://[<user>@]<host>/<path>[@<version>][#<subpath>]`,
   the qualifier percent-encoded (`+` → `%2B`, `/` → `%2F`, `@` → `%40`, `#` → `%23`, `:` kept), e.g.
   `pkg:generic/OpenSysML-Extensions-Library?vcs_url=git%2Bhttps:%2F%2Fgithub.com%2FOpen-MBEE%2FOpenSysML-Extensions-Library%401.0.0`.
   `<vcs>` is `git`, `svn` or `hg`, `<transport>` one of Annex B.3.5's (`git`, `https`, `http`,
   `ssh` for git; `http`, `https`, `static-http`, `ssh` for hg; `svn`, `http`, `https`, `ssh` for svn)
   plus `file` for a repository on this machine; `<name>` is the repository's last path segment.
+  `<user>@` is the SSH login and is accepted on `<vcs>+ssh` only
+  (`git+ssh://git@github.com/owner/repo@1.2.0`); it is part of the identity, so it is written to
+  `.project.json` and the lock as `…git%2Bssh:%2F%2Fgit%40github.com%2F…`, and the same location
+  without it is another identity. A password, or a user name on any other transport, is refused.
   Two shorter spellings are accepted as input and normalised to it: `pkg:git/<host>/<path>[@<version>][#<subpath>]`
-  (git over https) and the bare notation `git+https://host/path@1.2.0`, `svn://host/repo@1.2.0`,
+  (git over https) and the bare notation `git+https://host/path@1.2.0`, `git+ssh://git@host/path@1.2.0`, `svn://host/repo@1.2.0`,
   `hg+https://…`, `git+file:///srv/repo@1.2.0` (`git+file:///C:/repo@1.2.0` on Windows). Refused with a message naming those three:
   `pkg:svn/…`, `pkg:hg/…`, `pkg:github/…`, plain clone URLs (`https://host/path.git`, `ssh://…`,
   `git@host:path`, `file:///path@1.2.0`) and a commit id as version. SysPI hand-parses this one

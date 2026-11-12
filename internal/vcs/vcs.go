@@ -117,11 +117,20 @@ func AuthHint(name, msg string) string {
 	return ""
 }
 
-var userInfo = regexp.MustCompile(`(://)([^/@\s]+)@`)
+var userInfo = regexp.MustCompile(`([A-Za-z0-9+.-]*)(://)([^/@\s]+)@`)
 
 // redact strips the user-info part of any URL in s so credentials written
-// into a clone address never reach a log or an error.
-func redact(s string) string { return userInfo.ReplaceAllString(s, "${1}***@") }
+// into a clone address never reach a log or an error. An SSH login without a
+// password is no credential and stays readable.
+func redact(s string) string {
+	return userInfo.ReplaceAllStringFunc(s, func(m string) string {
+		p := userInfo.FindStringSubmatch(m)
+		if (p[1] == "ssh" || strings.HasSuffix(p[1], "+ssh")) && !strings.Contains(p[3], ":") {
+			return m
+		}
+		return p[1] + p[2] + "***@"
+	})
+}
 
 func redactAll(args []string) []string {
 	out := make([]string, len(args))
