@@ -80,12 +80,24 @@ func TestRefused(t *testing.T) {
 		{"pkg:cvs/host/repo@1.0.0", "pkg:cvs is not supported"},
 		{"https://github.com/acme/widgets@1.0.0", "only dereferenced as a project interchange file (.kpar); a repository is written as pkg:generic"},
 		{"https://github.com/acme/widgets.git", "only dereferenced as a project interchange file"},
-		{"git@github.com:acme/widgets.git@1.0.0", "write git+ssh://github.com/acme/widgets"},
+		{"git@github.com:acme/widgets.git@1.0.0", "write git+ssh://git@github.com/acme/widgets.git@1.0.0 or another of"},
+		{"example.org:acme/widgets.git", "write git+ssh://example.org/acme/widgets or another of"},
 		{"ssh://git@github.com/acme/widgets@1.0.0", "unsupported URL scheme; a repository is written as pkg:generic"},
 		{"file:///srv/git/widgets@1.0.0", "a repository on this machine is git+file://" + srvGitWidgets + "@1.0.0"},
 		{"/srv/git/widgets@1.0.0", "a repository on this machine is git+file://" + srvGitWidgets + "@1.0.0"},
 		{"pkg:git//srv/git/widgets@1.0.0", "a repository on this machine is git+file://" + srvGitWidgets + "@1.0.0"},
-		{"git+https://user:pw@github.com/acme/widgets", "user name or password in the host is not supported (ECMA-427 Annex B.3.5)"},
+		{"git+https://user:pw@github.com/acme/widgets", "a password in the host is not supported (ECMA-427 Annex B.3.5)"},
+		{"git+ssh://git:pw@github.com/acme/widgets", "a password in the host is not supported (ECMA-427 Annex B.3.5)"},
+		{"git+ssh://git:@github.com/acme/widgets", "a password in the host is not supported"},
+		{"pkg:generic/widgets?vcs_url=hg%2Bssh:%2F%2Fhg:pw%40hg.example.org%2Fwidgets", "a password in the host is not supported"},
+		{"git+https://git@github.com/acme/widgets@1.0.0", "a user name in the host is accepted only on git+ssh, where it is the SSH login; on git+https it would be a credential"},
+		{"pkg:git/git@github.com/acme/widgets@1.0.0", "a user name in the host is accepted only on git+ssh, where it is the SSH login; on git+https it would be a credential"},
+		{"git://git@github.com/acme/widgets", "on git+git it would be a credential"},
+		{"hg+https://hg@hg.example.org/widgets", "accepted only on hg+ssh"},
+		{"svn://svn@svn.example.org/widgets", "accepted only on svn+ssh"},
+		{"git+file://git@/srv/git/widgets", "accepted only on git+ssh"},
+		{"git+ssh://-oProxyCommand=x@github.com/acme/widgets", "starts with \"-\" and would be read as an option by ssh"},
+		{"git+ssh://git@github.com", "repository URL has no path"},
 		{"hg://hg.example.org/repo", "hg+hg is not a vcs_url scheme for hg (ECMA-427 Annex B.3.5 allows hg+http, hg+https, hg+static-http, hg+ssh, hg+file)"},
 		{"git+ftp://host/repo", "git+ftp is not a vcs_url scheme for git"},
 		{"bzr+https://host/repo", "version-control system \"bzr\" is not supported; supported: git, svn, hg"},
@@ -103,6 +115,83 @@ func TestRefused(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v\n want %q", tc.in, err, tc.want)
 		}
+	}
+}
+
+// A user name before the host of a <vcs>+ssh location is the SSH login: part of
+// the identity, percent-encoded with the rest of vcs_url, and of the clone address.
+func TestSSHUserName(t *testing.T) {
+	for _, tc := range []struct{ in, user, canonical, identity, source string }{
+		{"git+ssh://git@github.com/acme/widgets@1.0.0", "git",
+			"pkg:generic/widgets?vcs_url=git%2Bssh:%2F%2Fgit%40github.com%2Facme%2Fwidgets%401.0.0",
+			"pkg:generic/widgets?vcs_url=git%2Bssh:%2F%2Fgit%40github.com%2Facme%2Fwidgets",
+			"ssh://git@github.com/acme/widgets"},
+		{"git+ssh://git@GitHub.com/acme/widgets", "git",
+			"pkg:generic/widgets?vcs_url=git%2Bssh:%2F%2Fgit%40github.com%2Facme%2Fwidgets",
+			"pkg:generic/widgets?vcs_url=git%2Bssh:%2F%2Fgit%40github.com%2Facme%2Fwidgets",
+			"ssh://git@github.com/acme/widgets"},
+		{"pkg:generic/widgets@1.0.0?vcs_url=git%2Bssh:%2F%2Fgit%40github.com%2Facme%2Fwidgets", "git",
+			"pkg:generic/widgets?vcs_url=git%2Bssh:%2F%2Fgit%40github.com%2Facme%2Fwidgets%401.0.0",
+			"pkg:generic/widgets?vcs_url=git%2Bssh:%2F%2Fgit%40github.com%2Facme%2Fwidgets",
+			"ssh://git@github.com/acme/widgets"},
+		{"git+ssh://Deploy@git.example.org:2222/team/repo.git@1.2.0#packages/core", "Deploy",
+			"pkg:generic/repo?vcs_url=git%2Bssh:%2F%2FDeploy%40git.example.org:2222%2Fteam%2Frepo.git%401.2.0%23packages%2Fcore",
+			"pkg:generic/repo?vcs_url=git%2Bssh:%2F%2FDeploy%40git.example.org:2222%2Fteam%2Frepo.git%23packages%2Fcore",
+			"ssh://Deploy@git.example.org:2222/team/repo.git"},
+		{"hg+ssh://hg@hg.example.org/models/rover@2.0.0", "hg",
+			"pkg:generic/rover?vcs_url=hg%2Bssh:%2F%2Fhg%40hg.example.org%2Fmodels%2Frover%402.0.0",
+			"pkg:generic/rover?vcs_url=hg%2Bssh:%2F%2Fhg%40hg.example.org%2Fmodels%2Frover",
+			"ssh://hg@hg.example.org/models/rover"},
+		{"svn+ssh://svn@svn.example.org/repos/pkg", "svn",
+			"pkg:generic/pkg?vcs_url=svn%2Bssh:%2F%2Fsvn%40svn.example.org%2Frepos%2Fpkg",
+			"pkg:generic/pkg?vcs_url=svn%2Bssh:%2F%2Fsvn%40svn.example.org%2Frepos%2Fpkg",
+			"svn+ssh://svn@svn.example.org/repos/pkg"},
+		// A user name holding a reserved character stays escaped as userinfo inside vcs_url.
+		{"git+ssh://first.last%40corp@git.example.org/team/repo", "first.last@corp",
+			"pkg:generic/repo?vcs_url=git%2Bssh:%2F%2Ffirst.last%2540corp%40git.example.org%2Fteam%2Frepo",
+			"pkg:generic/repo?vcs_url=git%2Bssh:%2F%2Ffirst.last%2540corp%40git.example.org%2Fteam%2Frepo",
+			"ssh://first.last%40corp@git.example.org/team/repo"},
+		// An empty user name is no user name.
+		{"git+ssh://@github.com/acme/widgets@1.0.0", "",
+			"pkg:generic/widgets?vcs_url=git%2Bssh:%2F%2Fgithub.com%2Facme%2Fwidgets%401.0.0",
+			"pkg:generic/widgets?vcs_url=git%2Bssh:%2F%2Fgithub.com%2Facme%2Fwidgets",
+			"ssh://github.com/acme/widgets"},
+	} {
+		o, err := Parse(tc.in)
+		if err != nil {
+			t.Errorf("%s: %v", tc.in, err)
+			continue
+		}
+		if o.User != tc.user || o.Canonical() != tc.canonical || o.Identity() != tc.identity || o.Source != tc.source {
+			t.Errorf("%s:\n user %q\n canonical %s\n identity  %s\n source %s", tc.in, o.User, o.Canonical(), o.Identity(), o.Source)
+			continue
+		}
+		again, err := Parse(o.Canonical())
+		if err != nil || again.Canonical() != o.Canonical() || again.Identity() != o.Identity() || again.Source != o.Source || again.User != o.User || again.Version != o.Version {
+			t.Errorf("%s: canonical form does not round-trip: %v %+v", tc.in, err, again)
+		}
+	}
+}
+
+// The user name is part of the authority (RFC 3986 §3.2), so a location
+// written with it and one written without are two identities and two keys.
+func TestSSHUserNameIsIdentity(t *testing.T) {
+	key := func(res string) string {
+		o, err := Parse(res)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return o.Key()
+	}
+	with, without := key("git+ssh://git@example.org/team/repo.git@1.0.0"), key("git+ssh://example.org/team/repo")
+	if with == without {
+		t.Fatalf("user name dropped from the key: %s", with)
+	}
+	if want := "pkg:generic/repo?vcs_url=git%2Bssh:%2F%2Fgit%40example.org%2Fteam%2Frepo"; with != want || key("git+ssh://git@example.org/team/repo") != want {
+		t.Fatalf("key %s, want %s", with, want)
+	}
+	if key("git+ssh://Git@example.org/team/repo") == with {
+		t.Fatal("user names are case-sensitive")
 	}
 }
 
@@ -161,9 +250,17 @@ func TestDriveLetterFileURIs(t *testing.T) {
 		if o.Path != tc.path || o.Source != tc.src {
 			t.Errorf("windows=%v %s: path %q source %q, want %q %q", tc.windows, tc.in, o.Path, o.Source, tc.path, tc.src)
 		}
+		if o.Version != "1.0.0" {
+			t.Errorf("windows=%v %s: version %q, want 1.0.0", tc.windows, tc.in, o.Version)
+		}
 		if _, err := Parse(o.Canonical()); err != nil {
 			t.Errorf("windows=%v canonical %s: %v", tc.windows, o.Canonical(), err)
 		}
+	}
+	// Backslashes after "://" leave no "/" to end an authority: the @ is still the version's.
+	windowsPaths = true
+	if o, err := Parse(`git+file://C:\srv\widgets@1.0.0`); err != nil || o.Version != "1.0.0" || strings.Contains(o.Source, "@") {
+		t.Errorf(`git+file://C:\srv\widgets@1.0.0: %v %+v`, err, o)
 	}
 	windowsPaths = false
 	if _, err := Parse("file://C:/tools.kpar"); err == nil {

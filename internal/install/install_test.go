@@ -339,6 +339,7 @@ func TestLocationKey(t *testing.T) {
 	same := [][2]string{
 		{"git+ssh://Example.org/team/repo.git", "ssh://example.org/team/repo.git"},
 		{"git+https://example.org/team/repo", "https://example.org/team/repo"},
+		{"git+ssh://git@Example.org/team/repo", "ssh://git@example.org/team/repo"},
 		{"git+file:///srv/repo.git", filepath.FromSlash("/srv/repo.git")},
 		{"svn+file:///srv/repo", "file:///srv/repo"},
 	}
@@ -351,6 +352,8 @@ func TestLocationKey(t *testing.T) {
 		{"https://example.org/team/repo", "https://example.org/team/repo.git"},
 		{"ssh://example.org/team/repo", "https://example.org/team/repo"},
 		{"https://example.org/Team/repo", "https://example.org/team/repo"},
+		{"ssh://git@example.org/team/repo", "ssh://example.org/team/repo"},
+		{"ssh://Git@example.org/team/repo", "ssh://git@example.org/team/repo"},
 	}
 	for _, c := range differ {
 		if locationKey(c[0]) == locationKey(c[1]) {

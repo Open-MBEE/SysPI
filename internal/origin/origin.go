@@ -6,9 +6,9 @@
 // A version-controlled package is identified by an ECMA-427 Package-URL of
 // type generic carrying the Annex B.3.5 vcs_url qualifier:
 //
-//	pkg:generic/<name>?vcs_url=<vcs>+<transport>://<host>/<path>[@<version>][#<subpath>]
+//	pkg:generic/<name>?vcs_url=<vcs>+<transport>://[<user>@]<host>/<path>[@<version>][#<subpath>]
 //
-// with the qualifier value percent-encoded. pkg:git/<host>/<path>[@v][#sub]
+// with the qualifier value percent-encoded; <user>@ is the SSH login, on <vcs>+ssh only. pkg:git/<host>/<path>[@v][#sub]
 // and the bare vcs_url notation are accepted as input and normalised to it.
 package origin
 
@@ -73,13 +73,16 @@ var transports = map[string]map[string]bool{
 // Spellings names the three accepted ways to write a repository package.
 const Spellings = "pkg:generic/<name>?vcs_url=<vcs>%2B<transport>:%2F%2F<host>%2F<path>[%40<version>][%23<subpath>], " +
 	"pkg:git/<host>/<path>[@<version>][#<subpath>], or <vcs>+<transport>://<host>/<path>[@<version>][#<subpath>] " +
-	"(vcs: git, svn, hg; transports per ECMA-427 Annex B.3.5, plus file for a repository on this machine)"
+	"(vcs: git, svn, hg; transports per ECMA-427 Annex B.3.5, plus file for a repository on this machine; " +
+	"<user>@<host> names the SSH login on <vcs>+ssh only)"
 
 // Origin is a parsed resource.
 type Origin struct {
 	Kind Kind
 	// VCS and Transport are the vcs_url scheme parts for Kind == VCS.
 	VCS, Transport string
+	// User is the SSH login written before the host of a <vcs>+ssh location, "" when none.
+	User string
 	// Host is the repository host (empty for a repository on this machine).
 	Host string
 	// Path is the repository path on the host as written, without a leading
@@ -98,14 +101,22 @@ type Origin struct {
 	Resource string
 }
 
-// VCSURL is the Annex B.3.5 location: <vcs>+<transport>://<host>/<path>[@v][#sub].
+// authority is [<user>@]<host>, the user name escaped as RFC 3986 userinfo.
+func authority(user, host string) string {
+	if user == "" {
+		return host
+	}
+	return url.User(user).String() + "@" + host
+}
+
+// VCSURL is the Annex B.3.5 location: <vcs>+<transport>://[<user>@]<host>/<path>[@v][#sub].
 func (o *Origin) VCSURL(withVersion bool) string {
 	var b strings.Builder
 	b.WriteString(o.VCS)
 	b.WriteByte('+')
 	b.WriteString(o.Transport)
 	b.WriteString("://")
-	b.WriteString(o.Host)
+	b.WriteString(authority(o.User, o.Host))
 	b.WriteByte('/')
 	b.WriteString(strings.TrimPrefix(o.Path, "/"))
 	if withVersion && o.Version != "" {
@@ -200,7 +211,7 @@ func Parse(resource string) (*Origin, error) {
 		return nil, fmt.Errorf("resource %q: unsupported URL scheme; a repository is written as %s", res, Spellings)
 	}
 	if m := scpLike.FindStringSubmatch(res); m != nil && !filepath.IsAbs(res) && !strings.HasPrefix(res, ".") {
-		return nil, fmt.Errorf("resource %q: scp-style clone addresses are not identities; write git+ssh://%s/%s or another of %s", res, m[2], strings.TrimSuffix(m[3], ".git"), Spellings)
+		return nil, fmt.Errorf("resource %q: scp-style clone addresses are not identities; write git+ssh://%s%s/%s or another of %s", res, m[1], m[2], strings.TrimSuffix(m[3], ".git"), Spellings)
 	}
 	return parseLocal(res, res)
 }
@@ -281,12 +292,45 @@ func parseGitAlias(res, tail string) (*Origin, error) {
 	return parseVCSURL(res, "git+https://"+tail)
 }
 
-// parseVCSURL handles <vcs>[+<transport>]://<host>/<path>[@<version>][#<subpath>].
+// userInAuthority reports whether the last @ of spec lies in its authority,
+// where it ends a user name instead of starting a version.
+func userInAuthority(spec string) bool {
+	scheme, rest, _ := strings.Cut(spec, "://")
+	if scheme == "file" || strings.HasSuffix(scheme, "+file") {
+		return false // no authority: on Windows the path may follow "://" directly
+	}
+	auth, tail, _ := strings.Cut(rest, "/")
+	return strings.Contains(auth, "@") && !strings.Contains(tail, "@")
+}
+
+// sshUser is the user name of a vcs_url authority: accepted on ssh, where it
+// is the login and not a secret; a password, or a user name elsewhere, is refused.
+func sshUser(res, vcs, transport string, info *url.Userinfo) (string, error) {
+	if info == nil {
+		return "", nil
+	}
+	if _, has := info.Password(); has {
+		return "", fmt.Errorf("resource %q: a password in the host is not supported (ECMA-427 Annex B.3.5); use the credentials of your %s configuration", res, vcs)
+	}
+	if transport != "ssh" {
+		return "", fmt.Errorf("resource %q: a user name in the host is accepted only on %s+ssh, where it is the SSH login; on %s+%s it would be a credential (ECMA-427 Annex B.3.5) — use the credentials of your %s configuration", res, vcs, vcs, transport, vcs)
+	}
+	user := info.Username()
+	if strings.HasPrefix(user, "-") {
+		return "", fmt.Errorf("resource %q: user name %q starts with \"-\" and would be read as an option by ssh", res, user)
+	}
+	return user, nil
+}
+
+// parseVCSURL handles <vcs>[+<transport>]://[<user>@]<host>/<path>[@<version>][#<subpath>].
 func parseVCSURL(res, raw string) (*Origin, error) {
 	spec, sub := cutFragment(raw)
-	spec, ver, err := cutVersion(res, spec)
-	if err != nil {
-		return nil, err
+	ver := ""
+	if !userInAuthority(spec) {
+		var err error
+		if spec, ver, err = cutVersion(res, spec); err != nil {
+			return nil, err
+		}
 	}
 	scheme, rest, ok := strings.Cut(spec, "://")
 	if !ok {
@@ -312,13 +356,14 @@ func parseVCSURL(res, raw string) (*Origin, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resource %q: not a valid URL: %v", res, err)
 	}
-	if u.User != nil {
-		return nil, fmt.Errorf("resource %q: a user name or password in the host is not supported (ECMA-427 Annex B.3.5); use the credentials of your %s configuration", res, vcs)
+	user, err := sshUser(res, vcs, transport, u.User)
+	if err != nil {
+		return nil, err
 	}
 	if u.RawQuery != "" {
 		return nil, fmt.Errorf("resource %q: a vcs_url must not carry a query", res)
 	}
-	o := &Origin{Kind: VCS, VCS: vcs, Transport: transport, Subpath: sub, Version: ver, Resource: res}
+	o := &Origin{Kind: VCS, VCS: vcs, Transport: transport, User: user, Subpath: sub, Version: ver, Resource: res}
 	if transport == "file" {
 		if u.Host != "" || !strings.HasPrefix(u.Path, "/") {
 			return nil, fmt.Errorf("resource %q: a repository on this machine is %s+file:///absolute/path", res, vcs)
@@ -348,7 +393,7 @@ func parseVCSURL(res, raw string) (*Origin, error) {
 		return nil, fmt.Errorf("resource %q: repository path must not contain \"..\"", res)
 	}
 	o.Host, o.Path, o.Name = strings.ToLower(u.Host), p, strings.TrimSuffix(path.Base(p), ".git")
-	o.Source = source(vcs, transport, o.Host, p)
+	o.Source = source(vcs, transport, authority(user, o.Host), p)
 	return o, nil
 }
 

@@ -417,7 +417,7 @@ func (r *resolver) lockedRepository(o *origin.Origin, c version.Constraint) *loc
 }
 
 // locationKey normalises a repository source for comparison: a <vcs>+ scheme
-// prefix and host case do not matter, a file URL is its path; .git does.
+// prefix and host case do not matter, a file URL is its path; .git and a user name do.
 func locationKey(src string) string {
 	scheme, rest, ok := strings.Cut(src, "://")
 	if !ok {
@@ -430,8 +430,9 @@ func locationKey(src string) string {
 	if scheme == "file" {
 		return filepath.FromSlash(rest)
 	}
-	host, p, _ := strings.Cut(rest, "/")
-	return scheme + "://" + strings.ToLower(host) + "/" + p
+	authority, p, _ := strings.Cut(rest, "/")
+	at := strings.LastIndexByte(authority, '@') + 1
+	return scheme + "://" + authority[:at] + strings.ToLower(authority[at:]) + "/" + p
 }
 
 // reuseLocked keeps a locked archive entry when only the lock is being
