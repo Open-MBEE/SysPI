@@ -186,6 +186,8 @@ func TestHostedArchive(t *testing.T) {
 		{"pkg:generic/tools?download_url=https%3A%2F%2Fdist.example.org%2Freleases%2Fv3.0.0%2Facme-tools.kpar%3Fformat%3Dkpar", "pkg:generic/tools?download_url=" + enc, "pkg:generic/tools?download_url=" + enc, ""},
 		{"pkg:generic/tools@3.0.0?download_url=" + enc + "&checksum=SHA256:" + strings.ToUpper(sha), "pkg:generic/tools@3.0.0?checksum=sha256:" + sha + "&download_url=" + enc, "pkg:generic/tools?download_url=" + enc, "3.0.0"},
 		{"pkg:generic/tools?checksum=sha256:" + sha + "%2Cmd5:" + strings.Repeat("01", 16) + "&download_url=" + enc, "pkg:generic/tools?checksum=md5:" + strings.Repeat("01", 16) + "%2Csha256:" + sha + "&download_url=" + enc, "pkg:generic/tools?download_url=" + enc, ""},
+		{"pkg:generic/tools@1.2.3%2Bci.7?download_url=" + enc, "pkg:generic/tools@1.2.3%2Bci.7?download_url=" + enc, "pkg:generic/tools?download_url=" + enc, "1.2.3+ci.7"},
+		{"pkg:generic/tools@1.2.3+ci.7?download_url=" + enc, "pkg:generic/tools@1.2.3%2Bci.7?download_url=" + enc, "pkg:generic/tools?download_url=" + enc, "1.2.3+ci.7"},
 		{"pkg:generic/Tools%20Model?download_url=http:%2F%2F127.0.0.1:8000%2Fexport", "pkg:generic/Tools%20Model?download_url=http:%2F%2F127.0.0.1:8000%2Fexport", "pkg:generic/Tools%20Model?download_url=http:%2F%2F127.0.0.1:8000%2Fexport", ""},
 	} {
 		o, err := Parse(tc.in)

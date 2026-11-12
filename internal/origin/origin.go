@@ -276,6 +276,9 @@ func parseGeneric(res, tail string) (*Origin, error) {
 		return nil, fmt.Errorf("resource %q: invalid purl name", res)
 	}
 	if ver != "" {
+		if ver, err = url.PathUnescape(ver); err != nil {
+			return nil, fmt.Errorf("resource %q: invalid purl version", res)
+		}
 		if _, err := version.Parse(ver); err != nil {
 			return nil, fmt.Errorf("resource %q: %q is not a semantic version", res, ver)
 		}
