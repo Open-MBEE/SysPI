@@ -5,6 +5,8 @@ package install
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -585,4 +587,95 @@ func TestPublishRollsBackWhenTheLockCannotBeWritten(t *testing.T) {
 	if strings.Join(names, ",") != "acme-widgets_1.0.0" {
 		t.Fatalf("lib/ must match the lock still on disk, got %v", names)
 	}
+}
+
+// A .kpar named by a download_url purl installs as the plain IRI does, after
+// the declared checksum is verified; a mismatch installs nothing.
+func TestHostedArchive(t *testing.T) {
+	pkg := t.TempDir()
+	write(t, pkg, ".project.json", `{"name":"tools","publisher":"acme","version":"3.1.0"}`)
+	write(t, pkg, "Tools.sysml", "package Tools;\n")
+	kpar := filepath.Join(t.TempDir(), "release.kpar")
+	if _, err := project.Bundle(pkg, kpar, time.Unix(0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	sum, _ := digest.File(kpar)
+	srv := httptest.NewServer(http.FileServer(http.Dir(filepath.Dir(kpar))))
+	defer srv.Close()
+	enc := origin.Encode(srv.URL + "/release.kpar")
+	id := "pkg:generic/tools?download_url=" + enc
+	good := id + "&checksum=sha256:" + sum
+	wrong := id + "&checksum=sha256:" + strings.Repeat("00", 32)
+
+	// The wrong checksum: an error before the archive is opened, nothing under lib/, no lock.
+	bad := consumer(t, project.Usage{Resource: wrong})
+	before := treeList(t, bad)
+	runErr(t, bad, Options{}, "checksum mismatch: the resource declares sha256 "+strings.Repeat("00", 32)+", the archive has "+sum)
+	if after := treeList(t, bad); strings.Join(after, "\n") != strings.Join(before, "\n") {
+		t.Fatalf("a failed checksum changed the tree:\n%v\n%v", before, after)
+	}
+
+	dir := consumer(t, project.Usage{Resource: good, VersionConstraint: "^3.0.0"})
+	res, _ := run(t, dir, Options{})
+	if len(res.Installed) != 1 || res.Installed[0] != id {
+		t.Fatalf("result %+v", res)
+	}
+	if d, _ := digest.File(filepath.Join(dir, "lib", "acme-tools_3.1.0.kpar")); d != sum {
+		t.Fatal("installed archive differs")
+	}
+	lk, _, _ := lock.Read(dir, project.LockFile)
+	e := lk.Find(id)
+	if e == nil || e.Kind != lock.KindArchive || e.SHA256 != sum || e.Source != srv.URL+"/release.kpar" || e.Name != "tools" || e.Publisher != "acme" || e.Version != "3.1.0" {
+		t.Fatalf("lock entry %+v", e)
+	}
+	// Offline from the lock with the server gone; a second declared algorithm is
+	// checked against the installed archive.
+	res2, _ := run(t, dir, Options{Offline: true})
+	if len(res2.Reused) != 1 {
+		t.Fatalf("offline %+v", res2)
+	}
+	sha1sum := digestOf(t, kpar, "sha1")
+	rewrite(t, dir, project.Usage{Resource: id + "&checksum=sha1:" + sha1sum + "%2Csha256:" + sum})
+	if res3, _ := run(t, dir, Options{Offline: true}); len(res3.Reused) != 1 {
+		t.Fatalf("offline with two checksums %+v", res3)
+	}
+	rewrite(t, dir, project.Usage{Resource: wrong})
+	runErr(t, dir, Options{Offline: true}, "the lock records "+sum)
+	rewrite(t, dir, project.Usage{Resource: id + "&checksum=sha1:" + strings.Repeat("00", 20)})
+	runErr(t, dir, Options{Offline: true}, "checksum mismatch: the resource declares sha1 "+strings.Repeat("00", 20))
+
+	// Without a checksum the download is trusted as a plain IRI is; the lock still pins its digest.
+	plain := consumer(t, project.Usage{Resource: id})
+	if res, _ := run(t, plain, Options{}); len(res.Installed) != 1 {
+		t.Fatalf("result %+v", res)
+	}
+	// The version is the archive's own and is held to @<version> and versionConstraint.
+	runErr(t, consumer(t, project.Usage{Resource: "pkg:generic/tools@3.0.0?download_url=" + enc}), Options{}, "wants 3.0.0 but the archive holds tools 3.1.0")
+	runErr(t, consumer(t, project.Usage{Resource: id, VersionConstraint: "^4.0.0"}), Options{}, "wants ^4.0.0 but the archive holds tools 3.1.0")
+	// The purl name is the archive's name.
+	runErr(t, consumer(t, project.Usage{Resource: "pkg:generic/widgets?download_url=" + enc}), Options{}, `the purl names "widgets" but the archive's .project.json names "tools"`)
+	// Offline without the archive installed refuses as the plain IRI does.
+	runErr(t, consumer(t, project.Usage{Resource: good}), Options{Offline: true}, "offline: "+srv.URL+"/release.kpar is not installed")
+}
+
+// rewrite replaces the consumer's usages.
+func rewrite(t *testing.T, dir string, usages ...project.Usage) {
+	t.Helper()
+	p := &project.Project{Name: "app", Publisher: "test", Version: "0.1.0", Usage: usages}
+	if err := p.Write(dir); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// digestOf is the hex digest of a file under the named checksum algorithm.
+func digestOf(t *testing.T, path, algo string) string {
+	t.Helper()
+	data, _ := os.ReadFile(path)
+	switch algo {
+	case "sha1":
+		sum := sha1.Sum(data)
+		return hex.EncodeToString(sum[:])
+	}
+	t.Fatalf("unknown algorithm %s", algo)
+	return ""
 }

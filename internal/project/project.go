@@ -109,8 +109,12 @@ var ErrNoProject = errors.New("no " + ProjectFile)
 // Marshal renders the project as indented JSON with a trailing newline,
 // properties in Table 12 order.
 func (p *Project) Marshal() []byte {
-	data, _ := json.MarshalIndent(p, "", "  ")
-	return append(data, '\n')
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	enc.Encode(p)
+	return buf.Bytes()
 }
 
 // Write writes <dir>/.project.json.

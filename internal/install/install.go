@@ -440,8 +440,7 @@ func (r *resolver) reuseLocked(old *lock.Entry) (*lock.Entry, bool, error) {
 	if old == nil {
 		return nil, false, nil
 	}
-	stem := (&project.Project{Name: old.Name, Publisher: old.Publisher, Version: old.Version}).InstallName()
-	dst := filepath.Join(r.libDir, stem+project.ArchiveExt)
+	dst := r.lockedArchivePath(old)
 	cur, err := digest.File(dst)
 	if r.opts.LockOnly || (err == nil && cur == old.SHA256) {
 		if !r.opts.LockOnly {
@@ -455,6 +454,31 @@ func (r *resolver) reuseLocked(old *lock.Entry) (*lock.Entry, bool, error) {
 		return &e, true, r.requeueLocked(&e, old)
 	}
 	return nil, false, nil
+}
+
+// verifyLocked holds a reused lock entry to the checksums a hosted .kpar's
+// resource declares: a sha256 item against the lock's digest, every item
+// against the installed archive when it is present.
+func (r *resolver) verifyLocked(o *origin.Origin, old *lock.Entry) error {
+	if len(o.Checksums) == 0 {
+		return nil
+	}
+	for _, c := range o.Checksums {
+		if c.Algorithm == "sha256" && c.Value != old.SHA256 {
+			return fmt.Errorf("checksum mismatch: the resource declares sha256 %s, the lock records %s; remove the lock entry to resolve it again", c.Value, old.SHA256)
+		}
+	}
+	dst := r.lockedArchivePath(old)
+	if _, err := os.Stat(dst); err != nil {
+		return nil
+	}
+	return digest.Verify(dst, o.Checksums)
+}
+
+// lockedArchivePath is where a locked archive entry is installed under lib/.
+func (r *resolver) lockedArchivePath(old *lock.Entry) string {
+	stem := (&project.Project{Name: old.Name, Publisher: old.Publisher, Version: old.Version}).InstallName()
+	return filepath.Join(r.libDir, stem+project.ArchiveExt)
 }
 
 // requeueLocked queues the usages a locked entry recorded — as declared, so
@@ -528,7 +552,13 @@ func (r *resolver) resolveRemoteArchive(o *origin.Origin, req request) (*lock.En
 	id := o.Identity()
 	old := r.locked(id, req.constraint)
 	if e, ok, err := r.reuseLocked(old); ok || err != nil {
-		return e, err
+		if err == nil {
+			err = r.verifyLocked(o, old)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
+		}
+		return e, nil
 	}
 	tmp, err := os.MkdirTemp("", "syspi-dl-*")
 	if err != nil {
@@ -539,6 +569,11 @@ func (r *resolver) resolveRemoteArchive(o *origin.Origin, req request) (*lock.En
 	if err := r.download(o.Source, file); err != nil {
 		return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
 	}
+	// The declared checksums are checked before the archive is opened, so no
+	// member of a tampered download is read.
+	if err := digest.Verify(file, o.Checksums); err != nil {
+		return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
+	}
 	a, err := project.OpenArchive(file)
 	if err != nil {
 		return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
@@ -546,6 +581,9 @@ func (r *resolver) resolveRemoteArchive(o *origin.Origin, req request) (*lock.En
 	defer a.Close()
 	if old != nil && old.SHA256 != a.SHA256 {
 		return nil, fmt.Errorf("%s: usage %q: downloaded archive SHA-256 %s does not match the lock's %s", req.requester, req.resource, a.SHA256, old.SHA256)
+	}
+	if o.Hosted() && a.Project.Name != o.Name {
+		return nil, fmt.Errorf("%s: usage %q: the purl names %q but the archive's %s names %q", req.requester, req.resource, o.Name, project.ProjectFile, a.Project.Name)
 	}
 	v, _ := version.Parse(a.Project.Version)
 	if !req.constraint.Check(v) {

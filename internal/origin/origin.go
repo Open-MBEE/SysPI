@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/Open-MBEE/SysPI/internal/digest"
 	"github.com/Open-MBEE/SysPI/internal/version"
 )
 
@@ -75,6 +76,10 @@ const Spellings = "pkg:generic/<name>?vcs_url=<vcs>%2B<transport>:%2F%2F<host>%2
 	"pkg:git/<host>/<path>[@<version>][#<subpath>], or <vcs>+<transport>://<host>/<path>[@<version>][#<subpath>] " +
 	"(vcs: git, svn, hg; transports per ECMA-427 Annex B.3.5, plus file for a repository on this machine)"
 
+// ArchiveSpelling is the accepted way to write a .kpar hosted at an http(s) URL.
+const ArchiveSpelling = "pkg:generic/<name>[@<version>]?download_url=https:%2F%2F<host>%2F<path>[&checksum=<algorithm>:<hex>] " +
+	"(ECMA-427 Annex B.3.5; checksum optional, items comma-separated)"
+
 // Origin is a parsed resource.
 type Origin struct {
 	Kind Kind
@@ -94,6 +99,8 @@ type Origin struct {
 	// Source is what the VCS executable is given, or the archive path/URL, or
 	// the directory for LocalDir, or the IRI for Standard.
 	Source string
+	// Checksums are the checksum qualifier's items for a hosted .kpar, nil for none.
+	Checksums []digest.Checksum
 	// Resource is the resource exactly as written.
 	Resource string
 }
@@ -120,13 +127,20 @@ func (o *Origin) VCSURL(withVersion bool) string {
 }
 
 // Identity is the canonical, version-free identity of the package:
-// pkg:generic/<name>?vcs_url=… for a repository, otherwise the source.
+// pkg:generic/<name>?vcs_url=… for a repository, pkg:generic/<name>?download_url=…
+// for a hosted .kpar, otherwise the source.
 func (o *Origin) Identity() string {
-	if o.Kind != VCS {
-		return o.Source
+	switch {
+	case o.Kind == VCS:
+		return "pkg:generic/" + Encode(o.Name) + "?vcs_url=" + Encode(o.VCSURL(false))
+	case o.Hosted():
+		return "pkg:generic/" + Encode(o.Name) + "?download_url=" + Encode(o.Source)
 	}
-	return "pkg:generic/" + Encode(o.Name) + "?vcs_url=" + Encode(o.VCSURL(false))
+	return o.Source
 }
+
+// Hosted reports whether the resource is a .kpar written as a download_url purl.
+func (o *Origin) Hosted() bool { return o.Kind == RemoteArchive && o.Name != "" }
 
 // Key is the identity with a .git suffix dropped from the repository path:
 // what a lock entry and a usage are matched by, however the suffix was spelled.
@@ -140,12 +154,24 @@ func (o *Origin) Key() string {
 }
 
 // Canonical is the identity with the exact version inside vcs_url when one
-// was named.
+// was named; for a hosted .kpar, the purl with its version and, first in
+// qualifier order, its checksums.
 func (o *Origin) Canonical() string {
-	if o.Kind != VCS {
-		return o.Source
+	switch {
+	case o.Kind == VCS:
+		return "pkg:generic/" + Encode(o.Name) + "?vcs_url=" + Encode(o.VCSURL(true))
+	case o.Hosted():
+		s := "pkg:generic/" + Encode(o.Name)
+		if o.Version != "" {
+			s += "@" + Encode(o.Version)
+		}
+		s += "?"
+		if len(o.Checksums) > 0 {
+			s += "checksum=" + Encode(digest.FormatChecksums(o.Checksums)) + "&"
+		}
+		return s + "download_url=" + Encode(o.Source)
 	}
-	return "pkg:generic/" + Encode(o.Name) + "?vcs_url=" + Encode(o.VCSURL(true))
+	return o.Source
 }
 
 // Encode percent-encodes a purl component the way the canonical purl form
@@ -222,49 +248,89 @@ func parsePkg(res, rest string) (*Origin, error) {
 	}
 }
 
-// parseGeneric handles pkg:generic/<name>[@<version>]?vcs_url=<encoded>.
+// parseGeneric handles pkg:generic/<name>[@<version>] with a vcs_url
+// qualifier (a repository) or a download_url one (a hosted .kpar).
 func parseGeneric(res, tail string) (*Origin, error) {
 	namePart, query, hasQuery := strings.Cut(tail, "?")
 	if !hasQuery {
-		return nil, fmt.Errorf("resource %q: pkg:generic needs a vcs_url qualifier; write %s", res, Spellings)
+		return nil, fmt.Errorf("resource %q: pkg:generic needs a vcs_url or download_url qualifier; write %s or %s", res, Spellings, ArchiveSpelling)
 	}
 	q, err := url.ParseQuery(strings.ReplaceAll(query, "+", "%2B"))
 	if err != nil {
 		return nil, fmt.Errorf("resource %q: invalid qualifiers: %v", res, err)
 	}
-	for k := range q {
-		if k != "vcs_url" {
-			return nil, fmt.Errorf("resource %q: qualifier %q is not supported; only vcs_url is", res, k)
+	for k, vs := range q {
+		if k != "vcs_url" && k != "download_url" && k != "checksum" {
+			return nil, fmt.Errorf("resource %q: qualifier %q is not supported; vcs_url, download_url and checksum are", res, k)
+		}
+		if len(vs) != 1 || vs[0] == "" {
+			return nil, fmt.Errorf("resource %q: pkg:generic needs exactly one non-empty %s qualifier", res, k)
 		}
 	}
-	if len(q["vcs_url"]) != 1 || q["vcs_url"][0] == "" {
-		return nil, fmt.Errorf("resource %q: pkg:generic needs exactly one vcs_url qualifier", res)
-	}
-	o, err := parseVCSURL(res, q["vcs_url"][0])
-	if err != nil {
-		return nil, err
-	}
 	if strings.Contains(namePart, "/") {
-		return nil, fmt.Errorf("resource %q: pkg:generic takes no namespace; the name is the repository's last path segment", res)
+		return nil, fmt.Errorf("resource %q: pkg:generic takes no namespace; write the name alone", res)
 	}
 	name, ver, _ := strings.Cut(namePart, "@")
 	name, err = url.PathUnescape(name)
 	if err != nil || name == "" {
 		return nil, fmt.Errorf("resource %q: invalid purl name", res)
 	}
-	if name != o.Name {
-		return nil, fmt.Errorf("resource %q: purl name %q must be the repository's last path segment %q", res, name, o.Name)
-	}
 	if ver != "" {
 		if _, err := version.Parse(ver); err != nil {
 			return nil, fmt.Errorf("resource %q: %q is not a semantic version", res, ver)
 		}
+	}
+	_, hasVCS := q["vcs_url"]
+	_, hasDownload := q["download_url"]
+	switch {
+	case hasVCS && hasDownload:
+		return nil, fmt.Errorf("resource %q: vcs_url and download_url exclude each other; a package is either a repository or a hosted .kpar", res)
+	case hasDownload:
+		return parseDownload(res, name, ver, q)
+	case !hasVCS:
+		return nil, fmt.Errorf("resource %q: a checksum qualifier needs a download_url to verify; write %s", res, ArchiveSpelling)
+	case len(q) > 1:
+		return nil, fmt.Errorf("resource %q: a checksum qualifier is only verified with download_url; a repository is locked by its tree digest", res)
+	}
+	o, err := parseVCSURL(res, q["vcs_url"][0])
+	if err != nil {
+		return nil, err
+	}
+	if name != o.Name {
+		return nil, fmt.Errorf("resource %q: purl name %q must be the repository's last path segment %q", res, name, o.Name)
+	}
+	if ver != "" {
 		if o.Version != "" && o.Version != ver {
 			return nil, fmt.Errorf("resource %q: version %s in the purl and %s in vcs_url disagree", res, ver, o.Version)
 		}
 		o.Version = ver
 	}
 	o.Resource = res
+	return o, nil
+}
+
+// parseDownload handles the download_url form: the decoded qualifier is the
+// http(s) URL the .kpar is fetched from, checked as a plain .kpar IRI is but
+// for the extension, which a hosted archive's URL need not spell.
+func parseDownload(res, name, ver string, q url.Values) (*Origin, error) {
+	raw := q["download_url"][0]
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, fmt.Errorf("resource %q: download_url %q is not an http(s) URL", res, raw)
+	}
+	if u.User != nil {
+		return nil, fmt.Errorf("resource %q: credentials in download_url are not supported; add a netrc entry for %s instead and keep the URL bare", res, u.Hostname())
+	}
+	if u.Fragment != "" || strings.HasSuffix(raw, "#") {
+		return nil, fmt.Errorf("resource %q: a .kpar cannot have a #<subpath>", res)
+	}
+	o := &Origin{Kind: RemoteArchive, Name: name, Version: ver, Source: raw, Resource: res}
+	if cs, ok := q["checksum"]; ok {
+		o.Checksums, err = digest.ParseChecksums(cs[0])
+		if err != nil {
+			return nil, fmt.Errorf("resource %q: %v", res, err)
+		}
+	}
 	return o, nil
 }
 

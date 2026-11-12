@@ -10,7 +10,8 @@ what package managers install.
 ## The contract, on one screen
 
 - **Identity** — an ECMA-427 Package-URL of type `generic` with the Annex B.3.5 `vcs_url`
-  qualifier: `pkg:generic/<name>?vcs_url=<vcs>+<transport>://<host>/<path>[@<version>][#<subpath>]`,
+  qualifier for a repository (or `download_url` for a hosted `.kpar`, under "Other sources"):
+  `pkg:generic/<name>?vcs_url=<vcs>+<transport>://<host>/<path>[@<version>][#<subpath>]`,
   the qualifier percent-encoded (`+` → `%2B`, `/` → `%2F`, `@` → `%40`, `#` → `%23`, `:` kept), e.g.
   `pkg:generic/OpenSysML-Extensions-Library?vcs_url=git%2Bhttps:%2F%2Fgithub.com%2FOpen-MBEE%2FOpenSysML-Extensions-Library%401.0.0`.
   `<vcs>` is `git`, `svn` or `hg`, `<transport>` one of Annex B.3.5's (`git`, `https`, `http`,
@@ -44,7 +45,15 @@ what package managers install.
   `.kpar` SHA-256, and path-traversal, symlink and size bounds on every archive and export.
 - **Other sources** — a local directory (editable, read in place), a local `.kpar`, a remote
   `.kpar` URL, OMG standard-library IRIs (`https://www.omg.org/spec/{KerML,SysML}/…/*.kpar`,
-  recorded but never installed: every reader bundles them).
+  recorded but never installed: every reader bundles them). A `.kpar` hosted at any http(s) URL
+  — a release asset, a repository manager's export — is also a Package-URL with the Annex B.3.5
+  `download_url` qualifier and an optional `checksum`:
+  `pkg:generic/<name>[@<version>]?download_url=<url>[&checksum=<algorithm>:<hex>[,…]]`, both
+  percent-encoded (`pkg:generic/tools?checksum=sha256:9f86…&download_url=https:%2F%2Fdist.example.org%2Ftools.kpar`).
+  The archive is fetched as a plain `.kpar` URL is (netrc, redirects, size bound), the declared
+  checksums are verified before it is opened (a mismatch installs nothing), `<version>` is the
+  archive's own and is held to `@<version>` / `versionConstraint`, and the lock's `sha256` is the
+  archive digest.
 
 Details — the grammar, the svn `tags/` convention, the tree-hash algorithm and the lock format —
 are in [docs/packages.md](docs/packages.md).

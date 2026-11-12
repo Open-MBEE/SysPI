@@ -45,6 +45,9 @@ ECMA-427 Package-URL (vcs: git, svn, hg; transports per Annex B.3.5, plus file):
 Accepted as input and normalised to it:
   pkg:git/<host>/<path>[@<version>][#<subpath>]
   <vcs>+<transport>://<host>/<path>[@<version>][#<subpath>]
+A .kpar hosted at an http(s) URL is its IRI, or a Package-URL with the Annex B.3.5 download_url
+qualifier and an optional checksum (<algorithm>:<hex>, verified before the archive is opened):
+  pkg:generic/<name>[@<version>]?download_url=https:%2F%2F<host>%2F<path>[&checksum=sha256:<hex>]
 Run "syspi <command> -h" for the flags of a command.
 `
 

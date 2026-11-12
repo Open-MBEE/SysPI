@@ -50,6 +50,41 @@ host (Annex B.3.5), a transport outside the lists above, `bzr` or any other VCS,
 file — a `.kpar` — as KerML 1.1 §10.3 Table 12 describes `resource`; it is never cloned, and
 `user:password@` in it is refused (credentials belong in the netrc, never in `.project.json`).
 
+### Hosted archives
+
+A `.kpar` hosted at an http(s) URL is named either by that URL (a plain IRI, dereferenced as a
+project interchange file) or by a Package-URL of type `generic` carrying the Annex B.3.5
+`download_url` qualifier, with an optional `checksum`:
+
+```
+resource     = "pkg:generic/" name [ "@" version ] "?" qualifiers
+qualifiers   = [ "checksum=" encode(checksums) "&" ] "download_url=" encode(url)   (canonical order; any order accepted)
+url          = "http" [ "s" ] "://" host "/" path [ "?" query ]   (no user:password, no "#")
+checksums    = checksum *( "," checksum )                          ("," encoded as %2C)
+checksum     = algorithm ":" hex                                   (lower case; Annex B.3.5)
+algorithm    = "md5" | "sha1" | "sha224" | "sha256" | "sha384" | "sha512"
+             | "sha3-224" | "sha3-256" | "sha3-384" | "sha3-512"
+name         = the archive's .project.json "name"
+version      = semantic version the archive's .project.json must carry; an exact constraint
+```
+
+`vcs_url` and `download_url` exclude each other on one purl; `checksum` is only accepted with
+`download_url` (a repository is held by its tree hash). Any URL works — a release asset, a
+repository manager's export — and it need not end in `.kpar`; what it serves must be one. The
+archive is downloaded as a plain `.kpar` URL is (netrc, redirects, the size bound), every
+declared checksum is verified against the downloaded bytes before the archive is opened — a
+mismatch is an error and nothing is installed — and an algorithm this tool cannot compute is
+refused rather than skipped. The version is the archive's own `.project.json` `version`, checked
+against `@<version>` and `versionConstraint` as a plain IRI's is, and the purl `<name>` must be
+the archive's `name`. The archive installs as `lib/<publisher>-<name>_<version>.kpar`; the lock
+records the version-free identity `pkg:generic/<name>?download_url=encode(url)` as `resource`,
+the URL as `source` and the archive's SHA-256 as `sha256`, whatever algorithms the purl declares.
+`syspi add` writes the canonical form (version after the name, `checksum` before `download_url`,
+items sorted by algorithm) into `.project.json`; a later run with a declared checksum that
+disagrees with the lock or the installed archive fails. Example:
+
+- `pkg:generic/tools@3.0.0?checksum=sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08&download_url=https:%2F%2Fdist.example.org%2Freleases%2Facme-tools_3.0.0.kpar`
+
 ## What a package is
 
 The tagged tree — the repository root, or `#<subpath>` within it — is the project directory. It
@@ -138,7 +173,7 @@ and the lock as they were. A lock entry wins over the constraint in `.project.js
 .project.lock.json
 lib/
   mbse4u-sysmod_5.1.5/        exported tree of a tagged repository
-  acme-tools_3.0.0.kpar       archive source, verified and copied as is
+  acme-tools_3.0.0.kpar       archive source (a .kpar path, URL or download_url purl), verified and copied as is
 ```
 
 The directory name is `<publisher>-<name>_<version>` (`<name>_<version>` without a publisher),
