@@ -95,29 +95,51 @@ func FormatChecksums(sums []Checksum) string {
 	return strings.Join(parts, ",")
 }
 
-// Verify checks the file's bytes against every declared checksum in one pass
-// and reports the first that does not match.
-func Verify(path string, sums []Checksum) error {
+// Sums computes the file's digest under each item's algorithm in one pass,
+// keyed by algorithm.
+func Sums(path string, sums []Checksum) (map[string]string, error) {
+	out := map[string]string{}
 	if len(sums) == 0 {
-		return nil
+		return out, nil
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer f.Close()
-	hashes := make([]hash.Hash, len(sums))
-	writers := make([]io.Writer, len(sums))
-	for i, c := range sums {
-		hashes[i] = algorithms[c.Algorithm]()
-		writers[i] = hashes[i]
+	hashes := map[string]hash.Hash{}
+	var writers []io.Writer
+	for _, c := range sums {
+		if _, dup := hashes[c.Algorithm]; !dup {
+			hashes[c.Algorithm] = algorithms[c.Algorithm]()
+			writers = append(writers, hashes[c.Algorithm])
+		}
 	}
 	if _, err := io.Copy(io.MultiWriter(writers...), f); err != nil {
+		return nil, err
+	}
+	for algo, h := range hashes {
+		out[algo] = hex.EncodeToString(h.Sum(nil))
+	}
+	return out, nil
+}
+
+// Verify checks the file's bytes against every declared checksum and reports
+// the first that does not match.
+func Verify(path string, sums []Checksum) error {
+	got, err := Sums(path, sums)
+	if err != nil {
 		return err
 	}
-	for i, c := range sums {
-		if got := hex.EncodeToString(hashes[i].Sum(nil)); got != c.Value {
-			return fmt.Errorf("checksum mismatch: the resource declares %s %s, the archive has %s", c.Algorithm, c.Value, got)
+	return Compare(sums, got)
+}
+
+// Compare holds the declared checksums to digests computed from the archive,
+// keyed by algorithm; an algorithm absent from got is not checked.
+func Compare(sums []Checksum, got map[string]string) error {
+	for _, c := range sums {
+		if g, ok := got[c.Algorithm]; ok && g != c.Value {
+			return fmt.Errorf("checksum mismatch: the resource declares %s %s, the archive has %s", c.Algorithm, c.Value, g)
 		}
 	}
 	return nil
