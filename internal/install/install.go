@@ -634,15 +634,17 @@ func (r *resolver) latest(o *origin.Origin, req request) (vcs.Source, vcs.Versio
 	return src, sel, nil
 }
 
-// changes diffs two locks by resource: every entry moved, added or dropped.
+// changes diffs two locks by repository key (the old lock's resources are
+// already keyed): every entry moved, added or dropped.
 func changes(old, fresh *lock.Lock) []Change {
 	var out []Change
 	seen := map[string]bool{}
 	for i := range fresh.Packages {
 		e := &fresh.Packages[i]
-		seen[e.Resource] = true
+		k := lockKey(e.Resource)
+		seen[k] = true
 		c := Change{Resource: e.Resource, Name: e.Name, To: e.Version}
-		if o := old.Find(e.Resource); o != nil {
+		if o := old.Find(k); o != nil {
 			if o.Version == e.Version {
 				continue
 			}
@@ -652,7 +654,7 @@ func changes(old, fresh *lock.Lock) []Change {
 	}
 	for i := range old.Packages {
 		e := &old.Packages[i]
-		if !seen[e.Resource] {
+		if !seen[lockKey(e.Resource)] {
 			out = append(out, Change{Resource: e.Resource, Name: e.Name, From: e.Version})
 		}
 	}
@@ -686,7 +688,6 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 			return nil, err
 		}
 		if sel.Version.String() != old.Version {
-			r.logf("%s: %s %s -> %s", id, old.Name, old.Version, sel.Version)
 			old = nil
 		}
 	}
