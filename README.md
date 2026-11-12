@@ -54,6 +54,7 @@ are in [docs/packages.md](docs/packages.md).
 ```
 syspi init [-C dir] [-publisher P] [-name N] [-version V]   write .project.json and .meta.json
 syspi add <resource>[@<version>] [<constraint>]              add a usage, resolve, install, lock
+syspi remove <resource>...                                    drop a usage, re-lock, remove what nothing else needs from lib/
 syspi install | sync                                          resolve .project.json + lock, install what is missing or changed
 syspi lock                                                    write .project.lock.json without installing
 syspi bundle [-o out.kpar] [-tag T] <dir>                     deterministic .kpar; checks tag == version in a tagged checkout

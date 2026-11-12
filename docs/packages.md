@@ -144,6 +144,13 @@ lib/
 The directory name is `<publisher>-<name>_<version>` (`<name>_<version>` without a publisher),
 the convention OpenSysML reads.
 
+`syspi remove <resource>…` drops the usage with that canonical identity from `.project.json`,
+re-resolves and re-locks the remaining usages, and then removes from `lib/` each copy the previous
+lock had placed there that the new lock no longer claims — only when its contents still match the
+lock entry that installed it (the tree hash or the `.kpar` digest). A directory or archive the
+lock never placed under `lib/`, or one whose contents were edited, is left alone and said so. A
+package another locked package still uses stays locked and installed.
+
 ## Bundle reproducibility
 
 `syspi bundle` writes members sorted with fixed 1980-01-01 ZIP timestamps and regenerates

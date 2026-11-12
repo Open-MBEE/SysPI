@@ -38,6 +38,9 @@ type Options struct {
 	HTTP *http.Client
 	// LockOnly resolves and writes the lock without installing anything.
 	LockOnly bool
+	// Prune removes from lib/ the installed copies the previous lock placed
+	// there that the new lock no longer claims (see Remove).
+	Prune bool
 }
 
 // Result reports what a run did.
@@ -47,6 +50,10 @@ type Result struct {
 	Installed, Reused, Skipped []string
 	// LockWritten reports whether .project.lock.json changed on disk.
 	LockWritten bool
+	// RemovedUsages are the usages Remove dropped from .project.json, as written there.
+	RemovedUsages []string
+	// Pruned lists the lib/ paths (relative to Root) a pruning run removed.
+	Pruned []string
 }
 
 type request struct {
@@ -151,6 +158,11 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	}
 	for _, b := range backups {
 		os.RemoveAll(b.src)
+	}
+	if opts.Prune {
+		if err := r.prune(); err != nil {
+			return nil, err
+		}
 	}
 	return r.res, nil
 }
