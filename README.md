@@ -146,8 +146,7 @@ An authentication failure is reported with one hint naming the fix for that back
 
 ## Future
 
-Design only, not built here: a SysML-rendered index; LSP integration; attestation / cosign of
-releases; any server.
+Design only, not built here: a SysML-rendered index; LSP integration; any server.
 
 ## Licence
 
