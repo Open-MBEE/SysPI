@@ -1,1 +1,1 @@
-Resolve transitive version conflicts by trying other matching repository tags while preferring compatible locked versions.
+- Resolve transitive version conflicts by trying other matching repository tags while preferring compatible locked versions.
