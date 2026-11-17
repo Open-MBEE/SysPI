@@ -429,6 +429,11 @@ func TestTransitiveAndConflict(t *testing.T) {
 	run(t, dir2, Options{})
 	dir3 := consumer(t, project.Usage{Resource: bres + "@2.0.0"}, project.Usage{Resource: wres + "@1.1.0"})
 	runErr(t, dir3, Options{}, "already resolved to 2.0.0")
+	for _, name := range []string{project.LibDir, project.LockFile} {
+		if _, err := os.Stat(filepath.Join(dir3, name)); !os.IsNotExist(err) {
+			t.Fatalf("unsatisfiable install created %s: %v", name, err)
+		}
+	}
 	// A reused (locked, installed) widgets keeps its ^2.1.0 on base: adding base@2.0.0 later still conflicts,
 	// and the failed run leaves lib/ and the lock as they were.
 	before := treeList(t, filepath.Join(dir, "lib"))
@@ -462,6 +467,46 @@ func TestTransitiveAndConflict(t *testing.T) {
 	if len(l4.Packages) != 2 {
 		t.Fatalf("lock-only lock %+v", l4)
 	}
+}
+
+func TestBacktrackingReplacesConflictingLockChoice(t *testing.T) {
+	widgets, base := fixture(t)
+	wres := "git+file://" + filepath.ToSlash(widgets)
+	bres := "git+file://" + filepath.ToSlash(base)
+	widgetsUsage := project.Usage{Resource: wres, VersionConstraint: ">=1.0.0 <1.2.0"}
+	dir := consumer(t, widgetsUsage)
+	initial, _ := run(t, dir, Options{})
+	if entry := initial.Lock.Find(ident(t, wres)); entry == nil || entry.Version != "1.1.0" {
+		t.Fatalf("initial widgets = %+v", entry)
+	}
+	p, err := project.ReadProject(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Usage = append(p.Usage, project.Usage{Resource: bres + "@2.0.0"})
+	if err := p.Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	runErr(t, dir, Options{Offline: true}, "offline")
+
+	result, log := run(t, dir, Options{})
+	if entry := result.Lock.Find(ident(t, wres)); entry == nil || entry.Version != "1.0.0" || len(entry.Usage) != 0 {
+		t.Fatalf("widgets after backtracking = %+v", entry)
+	}
+	if entry := result.Lock.Find(ident(t, bres)); entry == nil || entry.Version != "2.0.0" {
+		t.Fatalf("base after backtracking = %+v", entry)
+	}
+	if strings.Contains(log, "widgets 1.1.0") || len(result.Reused) != 0 || len(result.Installed) != 2 {
+		t.Fatalf("rejected choice leaked into result %+v or log %q", result, log)
+	}
+	offline, _ := run(t, dir, Options{Offline: true})
+	if offline.LockWritten || len(offline.Reused) != 2 {
+		t.Fatalf("offline reuse = %+v", offline)
+	}
+
+	// The newest matching tag has invalid metadata, which is a hard error.
+	invalid := consumer(t, project.Usage{Resource: wres, VersionConstraint: ">=1.0.0 <1.3.0"})
+	runErr(t, invalid, Options{}, "the tag must equal the version")
 }
 
 func TestArchivesAndLocalDir(t *testing.T) {

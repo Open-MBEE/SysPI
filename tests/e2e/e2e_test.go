@@ -20,7 +20,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Open-MBEE/SysPI/internal/lock"
 	"github.com/Open-MBEE/SysPI/internal/origin"
+	"github.com/Open-MBEE/SysPI/internal/project"
 )
 
 var (
@@ -536,6 +538,45 @@ func TestAddKeepsMetamodel(t *testing.T) {
 		t.Fatalf("add did not regenerate the index:\n%s", meta)
 	}
 	sh(t, app, bin, "bundle", "-o", filepath.Join(root, "app.kpar"), app)
+}
+
+func TestResolverBacktracking(t *testing.T) {
+	bin := syspiBinary(t)
+	root := t.TempDir()
+	gitRes := "git+file://" + filepath.ToSlash(gitFixture(t, root))
+	gate := filepath.Join(root, "gate")
+	write(t, gate, project.ProjectFile, `{"name":"gate","version":"1.0.0","usage":[{"resource":"`+gitRes+`@1.0.0"}]}`)
+	for _, command := range []string{"lock", "install"} {
+		t.Run(command, func(t *testing.T) {
+			app := filepath.Join(root, command)
+			write(t, app, project.ProjectFile, `{"name":"app","version":"1.0.0","usage":[{"resource":"`+gitRes+`","versionConstraint":">=1.0.0 <1.2.0"},{"resource":"`+filepath.ToSlash(gate)+`"}]}`)
+			sh(t, app, bin, command)
+			lk, _, err := lock.Read(app, project.LockFile)
+			if err != nil || lk == nil {
+				t.Fatalf("read lock: %v", err)
+			}
+			o, err := origin.Parse(gitRes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if entry := lk.Find(o.Identity()); entry == nil || entry.Version != "1.0.0" {
+				t.Fatalf("resolved widgets = %+v", entry)
+			}
+			lib := filepath.Join(app, project.LibDir)
+			if _, err := os.Stat(filepath.Join(lib, "acme-widgets_1.1.0")); !os.IsNotExist(err) {
+				t.Fatalf("rejected candidate was installed: %v", err)
+			}
+			if command == "lock" {
+				if _, err := os.Stat(lib); !os.IsNotExist(err) {
+					t.Fatalf("lock created lib/: %v", err)
+				}
+				return
+			}
+			if _, err := os.Stat(filepath.Join(lib, "acme-widgets_1.0.0", "Widgets.sysml")); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
 func TestRefusals(t *testing.T) {

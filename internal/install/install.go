@@ -7,6 +7,7 @@
 package install
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -90,7 +91,6 @@ type request struct {
 type resolver struct {
 	ctx    context.Context
 	opts   Options
-	proj   *project.Project
 	old    *lock.Lock
 	fresh  *lock.Lock
 	chosen map[string]*lock.Entry // identity -> entry resolved in this run
@@ -103,10 +103,13 @@ type resolver struct {
 	libDir string
 	// stage holds newly fetched packages until every usage resolved; slots
 	// maps each lib/ destination to the resource and digest that claimed it.
-	stage string
-	items []staged
-	slots map[string]slot
-	http  *http.Client
+	stage   string
+	items   []staged
+	slots   map[string]slot
+	claimed []string
+	http    *http.Client
+	log     bytes.Buffer
+	tags    map[repository][]vcs.Version
 }
 
 // httpClient builds the credential-carrying client on first use, so an
@@ -158,7 +161,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if err := keyResources(old); err != nil {
 		return nil, err
 	}
-	r := &resolver{ctx: ctx, opts: opts, proj: proj, old: old, fresh: lock.New(), chosen: map[string]*lock.Entry{}, sums: map[string]map[string]string{}, res: &Result{}, libDir: filepath.Join(root, project.LibDir), slots: map[string]slot{}}
+	r := &resolver{ctx: ctx, opts: opts, old: old, fresh: lock.New(), chosen: map[string]*lock.Entry{}, sums: map[string]map[string]string{}, res: &Result{}, libDir: filepath.Join(root, project.LibDir), slots: map[string]slot{}, tags: map[repository][]vcs.Version{}}
 	for _, u := range proj.Usage {
 		c, err := usageConstraint(u)
 		if err != nil {
@@ -171,16 +174,13 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			os.RemoveAll(r.stage)
 		}
 	}()
-	for len(r.queue) > 0 {
-		req := r.queue[0]
-		r.queue = r.queue[1:]
-		if err := r.resolve(req); err != nil {
-			return nil, err
-		}
+	if err := r.solve(); err != nil {
+		return nil, err
 	}
 	r.res.Changes = changes(r.old, r.fresh)
 	if opts.DryRun {
 		r.res.Lock = r.fresh
+		r.log.WriteTo(opts.Log)
 		return r.res, nil
 	}
 	// Everything resolved and verified: publish the staged packages, then
@@ -201,6 +201,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if opts.Prune {
 		r.prune()
 	}
+	r.log.WriteTo(opts.Log)
 	return r.res, nil
 }
 
@@ -208,6 +209,11 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 // replaces beside the stage; the returned backups map each parked copy
 // (src) back to its destination (dst).
 func (r *resolver) publish() (backups []staged, err error) {
+	if len(r.items) > 0 {
+		if err := os.MkdirAll(r.libDir, 0o755); err != nil {
+			return nil, err
+		}
+	}
 	defer func() {
 		if err != nil {
 			r.rollback(backups)
@@ -268,10 +274,14 @@ func usageConstraint(u project.Usage) (version.Constraint, error) {
 // claim reserves a lib/ destination for a resource; two resources with the
 // same publisher, name and version may share it only with the same digest.
 func (r *resolver) claim(dst, resource, sha256 string) error {
-	if cur, ok := r.slots[dst]; ok && cur.resource != resource && cur.sha256 != sha256 {
-		return fmt.Errorf("%s and %s both install as %s with different contents (SHA-256 %s vs %s); rename one of the packages", cur.resource, resource, rel(r.opts.Root, dst), cur.sha256, sha256)
+	if cur, ok := r.slots[dst]; ok {
+		if cur.resource != resource && cur.sha256 != sha256 {
+			return conflictf("%s and %s both install as %s with different contents (SHA-256 %s vs %s); rename one of the packages", cur.resource, resource, rel(r.opts.Root, dst), cur.sha256, sha256)
+		}
+		return nil
 	}
 	r.slots[dst] = slot{resource, sha256}
+	r.claimed = append(r.claimed, dst)
 	return nil
 }
 
@@ -286,16 +296,18 @@ func (r *resolver) alreadyStaged(dst string) bool {
 	return false
 }
 
-// staging returns the directory new packages are written to before they
-// are published into lib/.
+// staging keeps new packages on the destination filesystem, even before lib/ exists.
 func (r *resolver) staging() (string, error) {
 	if r.stage != "" {
 		return r.stage, nil
 	}
-	if err := os.MkdirAll(r.libDir, 0o755); err != nil {
+	parent := r.libDir
+	if _, err := os.Stat(parent); os.IsNotExist(err) {
+		parent = r.opts.Root
+	} else if err != nil {
 		return "", err
 	}
-	stage, err := os.MkdirTemp(r.libDir, ".syspi-stage-*")
+	stage, err := os.MkdirTemp(parent, ".syspi-stage-*")
 	if err != nil {
 		return "", err
 	}
@@ -304,34 +316,13 @@ func (r *resolver) staging() (string, error) {
 }
 
 func (r *resolver) logf(format string, args ...any) {
-	fmt.Fprintf(r.opts.Log, format+"\n", args...)
+	fmt.Fprintf(&r.log, format+"\n", args...)
 }
 
-func (r *resolver) resolve(req request) error {
-	o, err := origin.Parse(req.resource)
-	if err != nil {
-		return fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
-	}
+func (r *resolver) resolveFixed(o *origin.Origin, req request) error {
 	id := o.Identity()
-	if e, done := r.chosen[id]; done {
-		if e.Kind != lock.KindStandard {
-			v, _ := version.Parse(e.Version)
-			if !req.constraint.Check(v) {
-				return fmt.Errorf("%s: usage %q wants %s but %s is already resolved to %s (required by another usage)", req.requester, req.resource, req.constraint, id, e.Version)
-			}
-		}
-		if e.Kind == lock.KindArchive {
-			checked, err := r.verifyDeclared(o, e)
-			if err == nil && !checked {
-				err = fmt.Errorf("the declared %s checksum cannot be verified: the archive is not installed", unverified(o, r.sums[id]))
-			}
-			if err != nil {
-				return fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
-			}
-		}
-		return nil
-	}
 	var e *lock.Entry
+	var err error
 	switch o.Kind {
 	case origin.Standard:
 		e = &lock.Entry{Resource: o.Source, Kind: lock.KindStandard, Name: path.Base(o.Source), Source: o.Source}
@@ -343,7 +334,7 @@ func (r *resolver) resolve(req request) error {
 	case origin.RemoteArchive:
 		e, err = r.resolveRemoteArchive(o, req)
 	case origin.VCS:
-		e, err = r.resolveVCS(o, req)
+		e, err = r.resolveVCS(o, req, r.lockedRepository(o, req.constraint), nil, vcs.Version{})
 	default:
 		err = fmt.Errorf("unsupported resource kind %s", o.Kind)
 	}
@@ -382,7 +373,7 @@ func (r *resolver) resolveLocalDir(o *origin.Origin, req request) (*lock.Entry, 
 	}
 	v, _ := version.Parse(p.Version)
 	if !req.constraint.Check(v) {
-		return nil, fmt.Errorf("%s: usage %q wants %s but the directory holds %s %s", req.requester, req.resource, req.constraint, p.Name, p.Version)
+		return nil, conflictf("%s: usage %q wants %s but the directory holds %s %s", req.requester, req.resource, req.constraint, p.Name, p.Version)
 	}
 	e := &lock.Entry{Resource: o.Identity(), Kind: lock.KindLocal, Publisher: p.Publisher, Name: p.Name, Version: p.Version, Source: o.Source}
 	r.res.Skipped = append(r.res.Skipped, o.Identity())
@@ -441,7 +432,7 @@ func (r *resolver) resolveLocalArchive(o *origin.Origin, req request) (*lock.Ent
 	defer a.Close()
 	v, _ := version.Parse(a.Project.Version)
 	if !req.constraint.Check(v) {
-		return nil, fmt.Errorf("%s: usage %q wants %s but the archive holds %s %s", req.requester, req.resource, req.constraint, a.Project.Name, a.Project.Version)
+		return nil, conflictf("%s: usage %q wants %s but the archive holds %s %s", req.requester, req.resource, req.constraint, a.Project.Name, a.Project.Version)
 	}
 	if old := r.old.Find(o.Identity()); old != nil && old.SHA256 != "" && old.SHA256 != a.SHA256 {
 		return nil, fmt.Errorf("%s: usage %q: archive SHA-256 %s does not match the lock's %s; remove the lock entry if the archive was meant to change", req.requester, req.resource, a.SHA256, old.SHA256)
@@ -708,7 +699,7 @@ func (r *resolver) resolveRemoteArchive(o *origin.Origin, req request) (*lock.En
 	}
 	v, _ := version.Parse(a.Project.Version)
 	if !req.constraint.Check(v) {
-		return nil, fmt.Errorf("%s: usage %q wants %s but the archive holds %s %s", req.requester, req.resource, req.constraint, a.Project.Name, a.Project.Version)
+		return nil, conflictf("%s: usage %q wants %s but the archive holds %s %s", req.requester, req.resource, req.constraint, a.Project.Name, a.Project.Version)
 	}
 	e := &lock.Entry{Resource: id, Kind: lock.KindArchive, Publisher: a.Project.Publisher, Name: a.Project.Name, Version: a.Project.Version, Source: o.Source, SHA256: a.SHA256}
 	return e, r.installArchive(e, a, file)
@@ -733,24 +724,6 @@ func (r *resolver) updating(o *origin.Origin) bool {
 		}
 	}
 	return false
-}
-
-// latest opens the repository and selects the highest tagged version that
-// satisfies the request's constraint.
-func (r *resolver) latest(o *origin.Origin, req request) (vcs.Source, vcs.Version, error) {
-	src, err := vcs.Open(o.VCS, o.Source)
-	if err != nil {
-		return nil, vcs.Version{}, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
-	}
-	vs, err := src.ListVersions(r.ctx)
-	if err != nil {
-		return nil, vcs.Version{}, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
-	}
-	sel, err := vcs.Select(vs, req.constraint)
-	if err != nil {
-		return nil, vcs.Version{}, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
-	}
-	return src, sel, nil
 }
 
 // changes diffs two locks by repository key (the old lock's resources are
@@ -793,25 +766,10 @@ func installedTreeMatches(dir string, old *lock.Entry) bool {
 	return err == nil && d == old.SHA256
 }
 
-func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error) {
+func (r *resolver) resolveVCS(o *origin.Origin, req request, old *lock.Entry, src vcs.Source, sel vcs.Version) (*lock.Entry, error) {
 	id := o.Identity()
-	old := r.lockedRepository(o, req.constraint)
-	var src vcs.Source
-	var sel vcs.Version
-	if old != nil && r.updating(o) {
-		if r.opts.Offline {
-			return nil, fmt.Errorf("%s: usage %q: offline; looking for a newer version of %s needs the repository", req.requester, req.resource, id)
-		}
-		var err error
-		if src, sel, err = r.latest(o, req); err != nil {
-			return nil, err
-		}
-		if sel.Version.String() != old.Version {
-			old = nil
-		} else {
-			// Already at the top: the locked tag, not another spelling of the same version.
-			sel = vcs.Version{Tag: old.Tag, Version: sel.Version}
-		}
+	if old != nil && r.opts.Offline && r.updating(o) {
+		return nil, fmt.Errorf("%s: usage %q: offline; looking for a newer version of %s needs the repository", req.requester, req.resource, id)
 	}
 	if old != nil && !r.opts.LockOnly {
 		stem := (&project.Project{Name: old.Name, Publisher: old.Publisher, Version: old.Version}).InstallName()
@@ -837,19 +795,15 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 	if r.opts.Offline {
 		return nil, fmt.Errorf("%s: usage %q: offline and %s is not installed under %s", req.requester, req.resource, id, project.LibDir)
 	}
-	var err error
-	switch {
-	case src != nil:
-		// Opened and selected above: the lock is being moved.
-	case old != nil:
-		if src, err = vcs.Open(o.VCS, o.Source); err != nil {
-			return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
-		}
+	if old != nil {
 		v, _ := version.Parse(old.Version)
 		sel = vcs.Version{Tag: old.Tag, Version: v}
-	default:
-		if src, sel, err = r.latest(o, req); err != nil {
-			return nil, err
+	}
+	if src == nil {
+		var err error
+		src, err = vcs.Open(o.VCS, o.Source)
+		if err != nil {
+			return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
 		}
 	}
 	revision, err := src.Revision(r.ctx, sel)
