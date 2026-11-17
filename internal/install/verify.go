@@ -94,7 +94,7 @@ func verifyUsage(l *lock.Lock, requester, what string, u project.Usage) []Discre
 	if e == nil {
 		return at("no lock entry; run syspi lock")
 	}
-	c, err := usageConstraint(u)
+	c, err := usageConstraint(u, o)
 	if err != nil {
 		return at(err.Error())
 	}

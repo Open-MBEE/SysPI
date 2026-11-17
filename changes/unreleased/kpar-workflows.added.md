@@ -1,0 +1,2 @@
+- Accept a model exporter's index when bundling and publish verified KPARs to HTTPS artifact hosts that support conditional PUT.
+- Prune VCS candidates using known constraints before export and reuse verified candidate metadata within a lock run.

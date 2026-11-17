@@ -221,7 +221,14 @@ func GenerateMeta(dir string, created time.Time, skip ...string) (*Meta, error) 
 	if err != nil {
 		return nil, err
 	}
-	m := &Meta{Index: map[string]string{}, Created: created.UTC().Format(time.RFC3339), Checksum: map[string]Checksums{}}
+	return generateMeta(dir, created, members, nil)
+}
+
+func generateMeta(dir string, created time.Time, members []string, index map[string]string) (*Meta, error) {
+	m := &Meta{Index: index, Created: created.UTC().Format(time.RFC3339), Checksum: map[string]Checksums{}}
+	if m.Index == nil {
+		m.Index = map[string]string{}
+	}
 	for _, rel := range members {
 		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
 		if err != nil {
@@ -229,7 +236,7 @@ func GenerateMeta(dir string, created time.Time, skip ...string) (*Meta, error) 
 		}
 		sum := sha256.Sum256(data)
 		m.Checksum[rel] = Checksums{{Value: hex.EncodeToString(sum[:]), Algorithm: SHA256}}
-		if IsModelFile(rel) {
+		if index == nil && IsModelFile(rel) {
 			for _, name := range topLevelPackages(rel, data) {
 				if prev, dup := m.Index[name]; !dup || rel < prev {
 					m.Index[name] = rel

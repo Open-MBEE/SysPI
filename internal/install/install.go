@@ -9,6 +9,7 @@ package install
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -86,6 +87,8 @@ type request struct {
 	resource   string
 	constraint version.Constraint
 	requester  string
+	origin     *origin.Origin
+	identity   string
 }
 
 type resolver struct {
@@ -103,13 +106,14 @@ type resolver struct {
 	libDir string
 	// stage holds newly fetched packages until every usage resolved; slots
 	// maps each lib/ destination to the resource and digest that claimed it.
-	stage   string
-	items   []staged
-	slots   map[string]slot
-	claimed []string
-	http    *http.Client
-	log     bytes.Buffer
-	tags    map[repository][]vcs.Version
+	stage          string
+	items          []staged
+	slots          map[string]slot
+	claimed        []string
+	http           *http.Client
+	log            bytes.Buffer
+	tags           map[repository][]vcs.Version
+	lockCandidates map[repositoryTag]verifiedCandidate
 }
 
 // httpClient builds the credential-carrying client on first use, so an
@@ -163,11 +167,11 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	}
 	r := &resolver{ctx: ctx, opts: opts, old: old, fresh: lock.New(), chosen: map[string]*lock.Entry{}, sums: map[string]map[string]string{}, res: &Result{}, libDir: filepath.Join(root, project.LibDir), slots: map[string]slot{}, tags: map[repository][]vcs.Version{}}
 	for _, u := range proj.Usage {
-		c, err := usageConstraint(u)
+		req, err := parseRequest(u, project.ProjectFile)
 		if err != nil {
 			return nil, err
 		}
-		r.queue = append(r.queue, request{resource: u.Resource, constraint: c, requester: project.ProjectFile})
+		r.queue = append(r.queue, req)
 	}
 	defer func() {
 		if r.stage != "" {
@@ -247,19 +251,28 @@ func (r *resolver) rollback(backups []staged) {
 	}
 }
 
+// parseRequest resolves a usage to its origin, identity and constraint once.
+func parseRequest(u project.Usage, requester string) (request, error) {
+	o, err := origin.Parse(u.Resource)
+	if err != nil {
+		return request{}, fmt.Errorf("%s: usage %q: %w", requester, u.Resource, err)
+	}
+	c, err := usageConstraint(u, o)
+	if err != nil {
+		return request{}, fmt.Errorf("%s: %w", requester, err)
+	}
+	return request{resource: u.Resource, constraint: c, requester: requester, origin: o, identity: o.Identity()}, nil
+}
+
 // usageConstraint derives the constraint of a usage: versionConstraint when
 // given, else an exact @<version> from the resource, else any version.
-func usageConstraint(u project.Usage) (version.Constraint, error) {
+func usageConstraint(u project.Usage, o *origin.Origin) (version.Constraint, error) {
 	if u.VersionConstraint != "" {
 		c, err := version.ParseConstraint(u.VersionConstraint)
 		if err != nil {
 			return c, fmt.Errorf("usage %q: %v", u.Resource, err)
 		}
 		return c, nil
-	}
-	o, err := origin.Parse(u.Resource)
-	if err != nil {
-		return version.Constraint{}, err
 	}
 	if o.Version != "" {
 		v, err := version.Parse(o.Version)
@@ -349,15 +362,12 @@ func (r *resolver) resolveFixed(o *origin.Origin, req request) error {
 // enqueueUsages queues the transitive usages of a resolved package.
 func (r *resolver) enqueueUsages(e *lock.Entry, p *project.Project) error {
 	for _, u := range p.Usage {
-		c, err := usageConstraint(u)
+		req, err := parseRequest(u, e.Resource)
 		if err != nil {
-			return fmt.Errorf("%s: %v", e.Resource, err)
-		}
-		if _, err := origin.Parse(u.Resource); err != nil {
-			return fmt.Errorf("%s: usage %q: %v", e.Resource, u.Resource, err)
+			return err
 		}
 		e.Usage = append(e.Usage, lock.Usage{Resource: u.Resource, VersionConstraint: u.VersionConstraint})
-		r.queue = append(r.queue, request{resource: u.Resource, constraint: c, requester: e.Resource})
+		r.queue = append(r.queue, req)
 	}
 	return nil
 }
@@ -588,12 +598,12 @@ func (r *resolver) lockedArchivePath(old *lock.Entry) string {
 // own — and an offline run walks the closure from the lock alone.
 func (r *resolver) requeueLocked(e *lock.Entry, old *lock.Entry) error {
 	for _, u := range old.Usage {
-		c, err := usageConstraint(project.Usage{Resource: u.Resource, VersionConstraint: u.VersionConstraint})
+		req, err := parseRequest(project.Usage{Resource: u.Resource, VersionConstraint: u.VersionConstraint}, e.Resource)
 		if err != nil {
-			return fmt.Errorf("%s: locked %v", e.Resource, err)
+			return fmt.Errorf("%s: locked %w", e.Resource, errors.Unwrap(err))
 		}
 		e.Usage = append(e.Usage, u)
-		r.queue = append(r.queue, request{resource: u.Resource, constraint: c, requester: e.Resource})
+		r.queue = append(r.queue, req)
 	}
 	return nil
 }
@@ -766,6 +776,14 @@ func installedTreeMatches(dir string, old *lock.Entry) bool {
 	return err == nil && d == old.SHA256
 }
 
+type repositoryTag struct{ identity, source, tag string }
+
+type verifiedCandidate struct {
+	entry   lock.Entry
+	project *project.Project
+	warning string
+}
+
 func (r *resolver) resolveVCS(o *origin.Origin, req request, old *lock.Entry, src vcs.Source, sel vcs.Version) (*lock.Entry, error) {
 	id := o.Identity()
 	if old != nil && r.opts.Offline && r.updating(o) {
@@ -798,6 +816,13 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request, old *lock.Entry, sr
 	if old != nil {
 		v, _ := version.Parse(old.Version)
 		sel = vcs.Version{Tag: old.Tag, Version: v}
+	}
+	key := repositoryTag{id, o.Source, sel.Tag}
+	if cached, ok := r.lockCandidates[key]; ok {
+		if cached.warning != "" {
+			r.logf("%s", cached.warning)
+		}
+		return &cached.entry, r.enqueueUsages(&cached.entry, cached.project)
 	}
 	if src == nil {
 		var err error
@@ -840,13 +865,15 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request, old *lock.Entry, sr
 	if err != nil {
 		return nil, fmt.Errorf("%s: usage %q: tag %s: %v", req.requester, req.resource, sel.Tag, err)
 	}
+	var warning string
 	if hasMeta {
 		unrecorded, err := project.VerifyChecksums(tree, meta)
 		if err != nil {
 			return nil, fmt.Errorf("%s: usage %q: tag %s: %v", req.requester, req.resource, sel.Tag, err)
 		}
 		if len(unrecorded) > 0 {
-			r.logf("%s: tag %s: %s records no checksum for %d of %d files; their integrity rests on the tree hash", id, sel.Tag, project.MetaFile, len(unrecorded), len(unrecorded)+len(meta.Checksum))
+			warning = fmt.Sprintf("%s: tag %s: %s records no checksum for %d of %d files; their integrity rests on the tree hash", id, sel.Tag, project.MetaFile, len(unrecorded), len(unrecorded)+len(meta.Checksum))
+			r.logf("%s", warning)
 		}
 	}
 	p, err := project.ReadProject(tree)
@@ -874,6 +901,10 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request, old *lock.Entry, sr
 		return nil, err
 	}
 	if r.opts.LockOnly {
+		if r.lockCandidates == nil {
+			r.lockCandidates = make(map[repositoryTag]verifiedCandidate)
+		}
+		r.lockCandidates[key] = verifiedCandidate{entry: *e, project: p, warning: warning}
 		return e, r.enqueueUsages(e, p)
 	}
 	if !hasMeta {

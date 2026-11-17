@@ -29,16 +29,12 @@ func (r *resolver) solve() error {
 		}
 		req := r.queue[0]
 		r.queue = r.queue[1:]
-		o, err := origin.Parse(req.resource)
-		if err != nil {
-			return fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
-		}
-		id := o.Identity()
+		o, id := req.origin, req.identity
 		if entry := r.chosen[id]; entry != nil {
 			if entry.Kind != lock.KindStandard {
 				v, _ := version.Parse(entry.Version)
 				if !req.constraint.Check(v) {
-					return conflictf("%s: usage %q wants %s but %s is already resolved to %s (required by another usage)", req.requester, req.resource, req.constraint, id, entry.Version)
+					return versionConflict(req, id, v)
 				}
 			}
 			if entry.Kind == lock.KindArchive {
@@ -63,11 +59,13 @@ func (r *resolver) solve() error {
 }
 
 func (r *resolver) solveVCS(o *origin.Origin, req request) error {
+	id := req.identity
+	pending := pendingRequests(r.queue, id)
 	save := r.saveChoice()
 	try := func(old *lock.Entry, source vcs.Source, candidate vcs.Version) error {
 		entry, err := r.resolveVCS(o, req, old, source, candidate)
 		if err == nil {
-			r.chosen[o.Identity()] = entry
+			r.chosen[id] = entry
 			r.fresh.Put(*entry)
 			err = r.solve()
 		}
@@ -85,8 +83,15 @@ func (r *resolver) solveVCS(o *origin.Origin, req request) error {
 	// An update moves only what it names: the named usage takes its highest version, the rest keep their lock entry.
 	updateRun := r.opts.UpdateAll || len(r.opts.Update) > 0
 	updating := r.updating(o)
+	tryLocked := func() error {
+		v, _ := version.Parse(locked.Version)
+		if err := checkPendingVersion(pending, id, v); err != nil {
+			return err
+		}
+		return try(locked, nil, vcs.Version{})
+	}
 	if locked != nil && !updating {
-		err := try(locked, nil, vcs.Version{})
+		err := tryLocked()
 		if updateRun || !errors.As(err, &firstConflict) {
 			return err
 		}
@@ -112,15 +117,18 @@ func (r *resolver) solveVCS(o *origin.Origin, req request) error {
 		}
 		atLock := locked != nil && candidate.Version.String() == locked.Version
 		if updating && atLock {
-			return try(locked, nil, vcs.Version{})
-		}
-		if updating {
-			return try(nil, source, candidate)
+			return tryLocked()
 		}
 		if atLock {
 			continue
 		}
-		err := try(nil, source, candidate)
+		err := checkPendingVersion(pending, id, candidate.Version)
+		if err == nil {
+			err = try(nil, source, candidate)
+		}
+		if updating {
+			return err
+		}
 		var conflict conflictError
 		if !errors.As(err, &conflict) {
 			return err
@@ -134,6 +142,30 @@ func (r *resolver) solveVCS(o *origin.Origin, req request) error {
 	}
 	_, err = vcs.Select(tags, req.constraint)
 	return conflictf("%s: usage %q: %v", req.requester, req.resource, err)
+}
+
+// Collect requirements already discovered on this branch before exporting any candidate.
+func pendingRequests(queue []request, id string) []request {
+	var pending []request
+	for _, req := range queue {
+		if req.identity == id {
+			pending = append(pending, req)
+		}
+	}
+	return pending
+}
+
+func checkPendingVersion(pending []request, id string, v version.Version) error {
+	for _, req := range pending {
+		if !req.constraint.Check(v) {
+			return versionConflict(req, id, v)
+		}
+	}
+	return nil
+}
+
+func versionConflict(req request, id string, v version.Version) error {
+	return conflictf("%s: usage %q wants %s but %s is already resolved to %s (required by another usage)", req.requester, req.resource, req.constraint, id, v)
 }
 
 type choice struct {

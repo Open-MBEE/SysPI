@@ -76,7 +76,8 @@ syspi install | sync                                          resolve .project.j
 syspi lock                                                    write .project.lock.json without installing
 syspi verify                                                  check lib/ against the lock, offline; exit 1 on any discrepancy, write nothing
 syspi list [-json]                                            the locked packages, where each is in lib/ and whether it is present
-syspi bundle [-o out.kpar] [-tag T] <dir>                     deterministic .kpar; checks tag == version in a tagged checkout
+syspi bundle [-o out.kpar] [-tag T] [-index index.json] <dir> deterministic .kpar with optional model index from an exporter
+syspi publish <archive.kpar> <https-url.kpar>               verify and upload to a conditional PUT artifact host
 ```
 
 Every project command takes `-C <dir>` and `-offline`. Every command works offline when the lock
