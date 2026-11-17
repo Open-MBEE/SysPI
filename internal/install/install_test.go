@@ -468,6 +468,7 @@ func TestArchivesAndLocalDir(t *testing.T) {
 	pkg := t.TempDir()
 	write(t, pkg, ".project.json", `{"name":"tools","publisher":"acme","version":"3.1.0","usage":[{"resource":"https://www.omg.org/spec/SysML/20250201/Systems-Library.kpar"}]}`)
 	write(t, pkg, "Tools.sysml", "package Tools;\n")
+	write(t, pkg, ".meta.json", `{"index":{},"created":"2000-01-01T00:00:00Z","metamodel":"https://www.omg.org/spec/SysML/20250201"}`)
 	kpar := filepath.Join(t.TempDir(), "acme-tools_3.1.0.kpar")
 	if _, err := project.Bundle(pkg, kpar, time.Unix(0, 0)); err != nil {
 		t.Fatal(err)

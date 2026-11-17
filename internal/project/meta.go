@@ -80,6 +80,23 @@ type Meta struct {
 // SHA256 is the algorithm name this tool writes (Table 13, Note 6).
 const SHA256 = "SHA256"
 
+const sysmlMetamodelPrefix = "https://www.omg.org/spec/SysML/"
+const sysml20Metamodel = sysmlMetamodelPrefix + "20250201"
+
+func validateBundleMetamodel(metamodel string, members []string) error {
+	isSysML := strings.HasPrefix(metamodel, sysmlMetamodelPrefix)
+	for _, member := range members {
+		if strings.EqualFold(filepath.Ext(member), ".sysml") {
+			isSysML = true
+			break
+		}
+	}
+	if isSysML && metamodel != sysml20Metamodel {
+		return fmt.Errorf("%s: SysML bundles require \"metamodel\": %q, got %q", MetaFile, sysml20Metamodel, metamodel)
+	}
+	return nil
+}
+
 // ParseMeta decodes a .meta.json body.
 func ParseMeta(data []byte) (*Meta, error) {
 	var m Meta

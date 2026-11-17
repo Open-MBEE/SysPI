@@ -115,8 +115,11 @@ func TestProjectAndMeta(t *testing.T) {
 	}
 }
 
+const testSysMLBundleMeta = `{"index":{},"created":"2000-01-01T00:00:00Z","metamodel":"https://www.omg.org/spec/SysML/20250201"}`
+
 func TestBundleDeterministicAndOpen(t *testing.T) {
 	dir := fixture(t)
+	writeFile(t, dir, MetaFile, testSysMLBundleMeta)
 	created := time.Unix(1700000000, 0)
 	out1 := filepath.Join(t.TempDir(), "a.kpar")
 	out2 := filepath.Join(t.TempDir(), "b.kpar")
@@ -166,6 +169,9 @@ func TestBundleDeterministicAndOpen(t *testing.T) {
 			t.Errorf("bundle checksum for %s = %+v", name, sum)
 		}
 	}
+	if a.Meta.Metamodel != "https://www.omg.org/spec/SysML/20250201" {
+		t.Errorf("bundle metamodel = %q", a.Meta.Metamodel)
+	}
 	if a.Project.Name != "widgets" || len(a.Members) != 3 || a.Members[0] != "README.md" {
 		t.Fatalf("archive = %+v", a)
 	}
@@ -213,6 +219,57 @@ func TestOpenArchiveLegacyChecksums(t *testing.T) {
 	}
 }
 
+func TestBundleMetamodel(t *testing.T) {
+	const sysml = "https://www.omg.org/spec/SysML/20250201"
+	const kerml = "https://www.omg.org/spec/KerML/20250201"
+	for _, tc := range []struct {
+		name      string
+		member    string
+		metamodel string
+		wantError bool
+	}{
+		{name: "missing", member: "model.SYSML", wantError: true},
+		{name: "malformed", member: "model.sysml", metamodel: "invalid URI", wantError: true},
+		{name: "unversioned", member: "model.sysml", metamodel: "https://www.omg.org/spec/SysML/2.0", wantError: true},
+		{name: "wrong language", member: "model.sysml", metamodel: kerml, wantError: true},
+		{name: "KerML default", member: "model.kerml"},
+		{name: "JSON SysML", member: "model.json", metamodel: sysml},
+		{name: "XMI KerML", member: "model.xmi", metamodel: kerml},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, ProjectFile, `{"name":"model","version":"1.0.0"}`)
+			writeFile(t, dir, tc.member, "model contents")
+			if tc.metamodel != "" {
+				meta := Meta{Index: map[string]string{}, Created: "2000-01-01T00:00:00Z", Metamodel: tc.metamodel}
+				writeFile(t, dir, MetaFile, string(meta.Marshal()))
+			}
+			out := filepath.Join(t.TempDir(), "model.kpar")
+			_, err := Bundle(dir, out, time.Unix(0, 0))
+			if tc.wantError {
+				if err == nil || !strings.Contains(err.Error(), sysml) {
+					t.Fatalf("bundle error = %v, want expected SysML metamodel URI", err)
+				}
+				if _, err := os.Stat(out); !os.IsNotExist(err) {
+					t.Fatalf("output exists or stat failed: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			a, err := OpenArchive(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer a.Close()
+			if a.Meta.Metamodel != tc.metamodel {
+				t.Errorf("bundle metamodel = %q, want %q", a.Meta.Metamodel, tc.metamodel)
+			}
+		})
+	}
+}
+
 // rawZip builds an archive from name→content pairs with no verification.
 func rawZip(t *testing.T, members map[string]string) string {
 	t.Helper()
@@ -233,6 +290,7 @@ func rawZip(t *testing.T, members map[string]string) string {
 
 func TestOpenArchiveRefusals(t *testing.T) {
 	good := fixture(t)
+	writeFile(t, good, MetaFile, testSysMLBundleMeta)
 	out := filepath.Join(t.TempDir(), "good.kpar")
 	if _, err := Bundle(good, out, time.Unix(0, 0)); err != nil {
 		t.Fatal(err)
