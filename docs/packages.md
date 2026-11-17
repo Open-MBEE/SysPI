@@ -146,6 +146,11 @@ the convention OpenSysML reads.
 
 ## Bundle reproducibility
 
+SysPI writes one SHA-256 checksum object per path, as defined by the KerML
+interchange JSON schema. It also reads the array form described by Table 13
+and used in earlier SysPI bundles. Rebuilding an older bundle changes its
+archive SHA-256, so update its lock pin when replacing the original artifact.
+
 `syspi bundle` writes members sorted with fixed 1980-01-01 ZIP timestamps and regenerates
 `.meta.json`. Its `created` time is `SOURCE_DATE_EPOCH` when set, otherwise the commit time of the
 checked-out git or hg revision, otherwise the current time; so a bundle of an unchanged checkout

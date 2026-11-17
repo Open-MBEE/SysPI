@@ -18,16 +18,24 @@ import (
 	"time"
 )
 
-// Checksum is one entry of .meta.json's checksum lists.
+// Checksum is one digest recorded in .meta.json.
 type Checksum struct {
 	Value     string `json:"value"`
 	Algorithm string `json:"algorithm"`
 }
 
-// Checksums is the list of checksums recorded for one member. Table 13
-// specifies a list; some producers write a single
-// object instead, so both shapes are read. Lists are written.
+// Checksums holds the digests recorded for one member. Table 13 describes
+// a list, while the normative JSON schema specifies a single object.
 type Checksums []Checksum
+
+// MarshalJSON writes generated singleton checksums as objects. Keep other
+// lists intact when reserializing existing metadata.
+func (c Checksums) MarshalJSON() ([]byte, error) {
+	if len(c) == 1 {
+		return json.Marshal(c[0])
+	}
+	return json.Marshal([]Checksum(c))
+}
 
 // UnmarshalJSON accepts a list of checksum objects or one object.
 func (c *Checksums) UnmarshalJSON(data []byte) error {
