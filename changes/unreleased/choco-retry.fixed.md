@@ -1,1 +1,0 @@
-- The Windows CI and release gates install `hg` and `sliksvn` one Chocolatey package at a time, retry a failed install and trust only the binary on disk, so a transient feed error no longer slips through a `choco` that exits 0 and surfaces as `svn: command not found` later.
