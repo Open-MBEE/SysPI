@@ -11,11 +11,13 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Open-MBEE/SysPI/internal/digest"
 	"github.com/Open-MBEE/SysPI/internal/netrc"
 	"github.com/Open-MBEE/SysPI/internal/origin"
 )
 
-// PublishArchive verifies and uploads a KPAR to a static HTTPS artifact registry.
+// PublishArchive verifies and uploads a KPAR to a static HTTPS artifact registry and
+// returns the canonical download_url usage that pins the uploaded bytes.
 func PublishArchive(ctx context.Context, client *http.Client, file, destination string) (string, error) {
 	u, err := url.Parse(destination)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil ||
@@ -59,7 +61,10 @@ func PublishArchive(ctx context.Context, client *http.Client, file, destination 
 	if err != nil {
 		return "", fmt.Errorf("verifying %s: %w", file, err)
 	}
-	sum := archive.SHA256
+	usage := (&origin.Origin{
+		Kind: origin.RemoteArchive, Name: archive.Project.Name, Version: archive.Project.Version, Source: destination,
+		Checksums: []digest.Checksum{{Algorithm: "sha256", Value: archive.SHA256}},
+	}).Canonical()
 	archive.Close()
 	if _, err := snapshot.Seek(0, io.SeekStart); err != nil {
 		return "", err
@@ -86,7 +91,7 @@ func PublishArchive(ctx context.Context, client *http.Client, file, destination 
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated, http.StatusNoContent:
-		return sum, nil
+		return usage, nil
 	case http.StatusPreconditionFailed:
 		return "", fmt.Errorf("publish %s: artifact already exists", u)
 	default:

@@ -316,9 +316,11 @@ package scanner.
 Run `syspi publish library.kpar https://packages.example.org/library/1.0.0/library.kpar`
 against an artifact host that accepts HTTPS PUT and honors `If-None-Match: *`.
 Use a versioned URL and configure credentials in the netrc if needed. SysPI
-verifies the archive before upload and prints its SHA-256. The same URL can be
-used as a project usage and pinned via `syspi lock` or `syspi install`. This
-workflow uses a direct artifact URL and has no package discovery or version index.
+verifies the archive before upload and prints the canonical usage for it,
+`pkg:generic/<name>@<version>?checksum=sha256:<hex>&download_url=<url>`, which `syspi add`
+accepts as is and which pins the uploaded bytes. Credentials come from the netrc only and are
+never printed. This workflow uses a direct artifact URL and has no package discovery or
+version index.
 
 ## Credentials
 

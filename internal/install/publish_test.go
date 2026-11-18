@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Open-MBEE/SysPI/internal/origin"
 	"github.com/Open-MBEE/SysPI/internal/project"
 )
 
@@ -57,16 +58,20 @@ func TestPublishAndInstall(t *testing.T) {
 	defer server.Close()
 	ctx := context.Background()
 	url := server.URL + "/library/1.0.0/library.kpar"
-	sum, err := project.PublishArchive(ctx, server.Client(), file, url)
+	usage, err := project.PublishArchive(ctx, server.Client(), file, url)
 	if err != nil {
 		t.Fatal(err)
+	}
+	o, err := origin.Parse(usage)
+	if err != nil || !o.Hosted() || o.Canonical() != usage || o.Version != "1.0.0" || len(o.Checksums) != 1 {
+		t.Fatalf("published usage %q: %+v, %v", usage, o, err)
 	}
 	if _, err := project.PublishArchive(ctx, server.Client(), file, url); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("publish existing artifact: %v", err)
 	}
-	root := consumer(t, project.Usage{Resource: url})
+	root := consumer(t, project.Usage{Resource: usage})
 	res, _ := run(t, root, Options{HTTP: server.Client()})
-	if entry := res.Lock.Find(url); entry == nil || entry.SHA256 != sum {
+	if entry := res.Lock.Find(o.Identity()); entry == nil || entry.SHA256 != o.Checksums[0].Value {
 		t.Fatalf("published digest was not locked: %+v", entry)
 	}
 	published, err := os.ReadFile(file)

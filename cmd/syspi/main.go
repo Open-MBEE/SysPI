@@ -513,11 +513,11 @@ func cmdPublish(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		fs.Usage()
 		return errUsage
 	}
-	sum, err := project.PublishArchive(ctx, nil, fs.Arg(0), fs.Arg(1))
+	usage, err := project.PublishArchive(ctx, nil, fs.Arg(0), fs.Arg(1))
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "published %s (sha256 %s)\n", fs.Arg(1), sum)
+	fmt.Fprintf(stdout, "published %s\n", usage)
 	return nil
 }
 
