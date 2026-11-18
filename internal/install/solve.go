@@ -5,6 +5,7 @@ package install
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 
 	"github.com/Open-MBEE/SysPI/internal/lock"
@@ -83,7 +84,7 @@ func (r *resolver) solveVCS(o *origin.Origin, req request) error {
 	locked := r.lockedRepository(o, req.constraint)
 	// An update moves only what it names: the named usage takes its highest version, the rest keep their lock entry.
 	updateRun := r.opts.UpdateAll || len(r.opts.Update) > 0
-	updating := locked != nil && r.updating(o)
+	updating := r.updating(o)
 	if locked != nil && !updating {
 		err := try(locked, nil, vcs.Version{})
 		if updateRun || !errors.As(err, &firstConflict) {
@@ -139,13 +140,19 @@ type choice struct {
 	queue                            []request
 	packages, items, claims, logSize int
 	installed, reused, skipped       int
+	sums                             map[string]map[string]string
 }
 
 func (r *resolver) saveChoice() choice {
 	// Keep later appends from overwriting the queue saved by this choice.
 	r.queue = r.queue[:len(r.queue):len(r.queue)]
+	// A rejected candidate's downloads are no witness for the archives fetched after it.
+	sums := make(map[string]map[string]string, len(r.sums))
+	for id, known := range r.sums {
+		sums[id] = maps.Clone(known)
+	}
 	return choice{
-		queue: r.queue, claims: len(r.claimed),
+		queue: r.queue, claims: len(r.claimed), sums: sums,
 		packages: len(r.fresh.Packages), items: len(r.items), logSize: r.log.Len(),
 		installed: len(r.res.Installed), reused: len(r.res.Reused), skipped: len(r.res.Skipped),
 	}
@@ -167,6 +174,10 @@ func (r *resolver) restoreChoice(save choice) error {
 	}
 	r.claimed = r.claimed[:save.claims]
 	r.queue = save.queue
+	r.sums = make(map[string]map[string]string, len(save.sums))
+	for id, known := range save.sums {
+		r.sums[id] = maps.Clone(known)
+	}
 	r.res.Installed = r.res.Installed[:save.installed]
 	r.res.Reused = r.res.Reused[:save.reused]
 	r.res.Skipped = r.res.Skipped[:save.skipped]
