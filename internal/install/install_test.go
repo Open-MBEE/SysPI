@@ -220,20 +220,15 @@ func TestGitInstallLockAndOffline(t *testing.T) {
 		t.Fatalf("re-resolved lock differs:\n%s\n%s", first, third)
 	}
 
-	// A lock whose resources carry an older, non-canonical spelling still
-	// matches the installed trees offline.
-	legacy := strings.ReplaceAll(string(first), `"`+ident(t, wres)+`"`, `"`+wres+`"`)
-	if legacy == string(first) {
+	// A lock whose resources carry a non-canonical spelling is not one this
+	// tool wrote and is refused, not guessed at.
+	stale := strings.ReplaceAll(string(first), `"`+ident(t, wres)+`"`, `"`+wres+`"`)
+	if stale == string(first) {
 		t.Fatal("lock did not contain the canonical widgets identity")
 	}
-	write(t, dir, project.LockFile, legacy)
-	res5, log5 := run(t, dir, Options{Offline: true})
-	if len(res5.Reused) != 2 || !res5.LockWritten {
-		t.Fatalf("legacy lock run %+v\n%s", res5, log5)
-	}
-	if again, _ := os.ReadFile(filepath.Join(dir, project.LockFile)); !bytes.Equal(again, first) {
-		t.Fatalf("legacy lock not rewritten canonically:\n%s", again)
-	}
+	write(t, dir, project.LockFile, stale)
+	runErr(t, dir, Options{Offline: true}, "resource "+wres+" is not canonical")
+	write(t, dir, project.LockFile, string(first))
 
 	// Offline with the repository gone: still satisfied.
 	os.RemoveAll(widgets)
@@ -253,27 +248,37 @@ func TestGitInstallLockAndOffline(t *testing.T) {
 
 func TestKeyResources(t *testing.T) {
 	l := lock.New()
-	l.Put(lock.Entry{Resource: "pkg:git/example.org/team/widgets", Kind: lock.KindVCS})
-	l.Put(lock.Entry{Resource: "git+ssh://example.org/team/gears.git#packages/gears", Kind: lock.KindVCS})
 	l.Put(lock.Entry{Resource: "https://example.org/dist/tools_1.0.0.kpar", Kind: lock.KindArchive})
 	l.Put(lock.Entry{Resource: "pkg:generic/rover?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Frover.git", Kind: lock.KindVCS})
-	keyResources(l)
+	l.Put(lock.Entry{Resource: "pkg:generic/gears?vcs_url=git%2Bssh:%2F%2Fexample.org%2Fteam%2Fgears%23packages%2Fgears", Kind: lock.KindVCS})
+	if err := keyResources(l); err != nil {
+		t.Fatal(err)
+	}
 	want := []string{
-		"pkg:generic/widgets?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Fwidgets",
-		"pkg:generic/gears?vcs_url=git%2Bssh:%2F%2Fexample.org%2Fteam%2Fgears%23packages%2Fgears",
 		"https://example.org/dist/tools_1.0.0.kpar",
 		"pkg:generic/rover?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Frover",
+		"pkg:generic/gears?vcs_url=git%2Bssh:%2F%2Fexample.org%2Fteam%2Fgears%23packages%2Fgears",
 	}
 	for i, w := range want {
 		if l.Packages[i].Resource != w {
 			t.Errorf("entry %d = %s, want %s", i, l.Packages[i].Resource, w)
 		}
 	}
+	for _, res := range []string{
+		"pkg:git/example.org/team/widgets",
+		"git+ssh://example.org/team/gears.git#packages/gears",
+		"pkg:generic/widgets?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fteam%2Fwidgets%401.0.0",
+	} {
+		l := lock.New()
+		l.Put(lock.Entry{Resource: res, Kind: lock.KindVCS})
+		if err := keyResources(l); err == nil || !strings.Contains(err.Error(), "not canonical") {
+			t.Errorf("%s: want a non-canonical error, got %v", res, err)
+		}
+	}
 }
 
-// A lock written in any spelling of the repository, with or without .git,
-// matches a usage in any spelling of the same location, and the installed
-// tree is reused offline; a usage naming the other location (repo for
+// A lock written with or without .git matches a usage in any spelling of the
+// same location, and the installed tree is reused offline; a usage naming the other location (repo for
 // repo.git) is a different repository and is not served from that tree.
 func TestLockMatchesAcrossGitSuffixSpellings(t *testing.T) {
 	widgets, _ := fixture(t)
@@ -310,6 +315,9 @@ func TestLockMatchesAcrossGitSuffixSpellings(t *testing.T) {
 		t.Fatalf("older source not rewritten:\n%s", again)
 	}
 	for _, lk := range spellings {
+		if !strings.HasPrefix(lk.res, "pkg:") {
+			continue // the lock holds canonical identities only
+		}
 		for _, us := range spellings {
 			p := &project.Project{Name: "app", Publisher: "test", Version: "0.1.0", Usage: []project.Usage{usage(us.res)}}
 			if err := p.Write(dir); err != nil {

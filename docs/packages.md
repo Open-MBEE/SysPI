@@ -130,6 +130,9 @@ closure from the lock alone. Two packages that would install under the same
 published into `lib/` only after every usage resolved and verified; a failing run leaves `lib/`
 and the lock as they were. A lock entry wins over the constraint in `.project.json` as long as it satisfies it;
 `install` then verifies the installed copy's digest and fetches only what is missing or changed.
+A lock is read as written: a repository `resource` in any spelling other than the canonical
+identity above, or a `usage` entry that is a bare string, is refused with the form this tool
+writes, not translated.
 
 ## Install layout
 

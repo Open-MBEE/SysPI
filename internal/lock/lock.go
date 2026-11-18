@@ -56,23 +56,6 @@ type Usage struct {
 	VersionConstraint string `json:"versionConstraint,omitempty"`
 }
 
-// UnmarshalJSON also accepts the bare resource string earlier locks wrote
-// (its @<version>, if any, is the constraint, as in .project.json).
-func (u *Usage) UnmarshalJSON(data []byte) error {
-	var s string
-	if err := json.Unmarshal(data, &s); err == nil {
-		*u = Usage{Resource: s}
-		return nil
-	}
-	type plain Usage
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*u = Usage(p)
-	return nil
-}
-
 func sortUsages(u []Usage) {
 	sort.Slice(u, func(i, j int) bool {
 		if u[i].Resource != u[j].Resource {
