@@ -33,6 +33,7 @@ Usage:
 Commands:
   init      write .project.json and .meta.json for a new package
   add       add a usage to .project.json, then resolve, install and lock
+  remove    drop a usage from .project.json, re-lock, remove what nothing else needs from lib/
   install   resolve .project.json and the lock, install what is missing or changed
   sync      same as install
   lock      resolve and write .project.lock.json without installing
@@ -65,6 +66,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdInit(args[1:], stdout, stderr)
 	case "add":
 		err = cmdAdd(ctx, args[1:], stdout, stderr)
+	case "remove":
+		err = cmdRemove(ctx, args[1:], stdout, stderr)
 	case "install", "sync":
 		err = cmdInstall(ctx, args[0], args[1:], stdout, stderr, false)
 	case "lock":
@@ -235,6 +238,31 @@ func cmdAdd(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 	if err != nil {
 		os.WriteFile(filepath.Join(c.dir, project.ProjectFile), data, 0o644)
 		return err
+	}
+	report(stdout, res)
+	return refreshMeta(c.dir)
+}
+
+func cmdRemove(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	var c commonFlags
+	fs := newFlagSet("remove", stderr, "[flags] <resource>...")
+	c.bind(fs)
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() < 1 {
+		fs.Usage()
+		return errUsage
+	}
+	res, err := install.Remove(ctx, c.options(stderr, false), fs.Args())
+	if err != nil {
+		return err
+	}
+	for _, u := range res.RemovedUsages {
+		fmt.Fprintf(stdout, "removed usage %s\n", u)
+	}
+	for _, p := range res.Pruned {
+		fmt.Fprintf(stdout, "removed %s\n", p)
 	}
 	report(stdout, res)
 	return refreshMeta(c.dir)

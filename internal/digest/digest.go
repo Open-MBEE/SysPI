@@ -109,3 +109,25 @@ func File(path string) (string, error) {
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
+
+// MetadataDirs lists, relative to root and sorted, the repository metadata
+// directories (.git, .hg, .svn) under root that Tree leaves out of a digest.
+func MetadataDirs(root string) ([]string, error) {
+	var out []string
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && p != root && metadataDirs[d.Name()] {
+			rel, err := filepath.Rel(root, p)
+			if err != nil {
+				return err
+			}
+			out = append(out, filepath.ToSlash(rel))
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	sort.Strings(out)
+	return out, err
+}
