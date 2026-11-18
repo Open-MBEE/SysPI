@@ -168,7 +168,12 @@ func versionsFromNames(names []string) []Version {
 	for _, v := range byVersion {
 		out = append(out, v)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Version.Less(out[j].Version) })
+	sort.Slice(out, func(i, j int) bool {
+		if order := out[i].Version.Compare(out[j].Version); order != 0 {
+			return order < 0
+		}
+		return out[i].Version.String() < out[j].Version.String()
+	})
 	return out
 }
 

@@ -40,8 +40,9 @@ what package managers install.
 - **Lock** — `.project.lock.json` beside `.project.json`: one entry per package of the
   transitive closure with `resource`, `kind`, `vcs`, `source`, `tag`, `revision`, `sha256` and
   the usages it declares; deterministic bytes, so a fresh clone reproduces it exactly. A lock
-  entry wins over a constraint everywhere but in `update`, the one command that moves a lock
-  entry (`outdated` shows what it would move).
+  entry wins over a constraint everywhere but in `update`, the one command that moves an entry
+  the graph can keep (`outdated` shows what it would move); an entry whose version conflicts
+  with another usage is re-resolved to another matching tag.
 - **Constraints** — `versionConstraint` in `.project.json`: exact (`1.2.0`), caret (`^1.2.0`),
   tilde (`~1.2.0`) and comparison ranges (`>=1.2.0 <2.0.0`). `@<version>` in the resource with no
   `versionConstraint` is an exact constraint.
