@@ -52,6 +52,9 @@ Accepted as input and normalised to it:
   <vcs>+<transport>://[<user>@]<host>/<path>[@<version>][#<subpath>]
 <user>@ is the SSH login, accepted on <vcs>+ssh only (git+ssh://git@github.com/owner/repo@1.0.0)
 and part of the identity; a password, or a user name on another transport, is refused.
+A .kpar hosted at an http(s) URL is its IRI, or a Package-URL with the Annex B.3.5 download_url
+qualifier and an optional checksum (<algorithm>:<hex>, verified before the archive is opened):
+  pkg:generic/<name>[@<version>]?download_url=https:%2F%2F<host>%2F<path>[&checksum=sha256:<hex>]
 Run "syspi <command> -h" for the flags of a command.
 `
 
