@@ -152,3 +152,35 @@ func TestVerifyRelativeLocalDir(t *testing.T) {
 		t.Fatalf("%v\n%s", err, problems(ds))
 	}
 }
+
+// A lock entry of a kind this tool does not know is a discrepancy, not a
+// package silently passed over; and a usage's resource and constraint are
+// compared as two fields, not one string.
+func TestVerifyUnknownKindAndUsageFields(t *testing.T) {
+	dir := consumer(t, project.Usage{Resource: "pkgs/dev"})
+	write(t, dir, "pkgs/dev/.project.json", `{"name":"dev","version":"0.0.1","usage":[{"resource":"pkgs/core 1.0.0"}]}`)
+	write(t, dir, "pkgs/core 1.0.0/.project.json", `{"name":"core","version":"1.0.0"}`)
+	run(t, dir, Options{})
+	lk, _, _ := lock.Read(dir, project.LockFile)
+	lk.Put(lock.Entry{Resource: "https://example.invalid/x.kpar", Kind: "tarball", Name: "x", Version: "1.0.0"})
+	for i := range lk.Packages {
+		if lk.Packages[i].Name == "dev" {
+			lk.Packages[i].Usage = []lock.Usage{{Resource: "pkgs/core", VersionConstraint: "1.0.0"}}
+		}
+	}
+	os.WriteFile(filepath.Join(dir, project.LockFile), lk.Marshal(), 0o644)
+	ds, _, err := Verify(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := problems(ds)
+	for _, want := range []string{
+		`https://example.invalid/x.kpar: lock entry has the unknown kind "tarball"`,
+		"declares usage pkgs/core 1.0.0, which the lock does not record",
+		"the lock records usage pkgs/core 1.0.0, which .project.json no longer declares",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}

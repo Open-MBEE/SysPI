@@ -72,6 +72,9 @@ func Verify(root string) ([]Discrepancy, int, error) {
 			out = append(out, verifyArchive(root, libPath(libDir, e), e)...)
 		case lock.KindLocal:
 			out = append(out, verifyLocal(root, e)...)
+		case lock.KindStandard:
+		default:
+			out = append(out, Discrepancy{Resource: e.Resource, Problem: fmt.Sprintf("lock entry has the unknown kind %q; nothing of it can be checked", e.Kind)})
 		}
 	}
 	return out, len(l.Packages), nil
@@ -210,21 +213,36 @@ func verifyProject(at func(string) Discrepancy, p *project.Project, e *lock.Entr
 	}
 	declared := make([]string, 0, len(p.Usage))
 	for _, u := range p.Usage {
-		declared = append(declared, usageText(u.Resource, u.VersionConstraint))
+		declared = append(declared, usageKey(u.Resource, u.VersionConstraint))
 	}
 	locked := make([]string, 0, len(e.Usage))
 	for _, u := range e.Usage {
-		locked = append(locked, usageText(u.Resource, u.VersionConstraint))
+		locked = append(locked, usageKey(u.Resource, u.VersionConstraint))
 	}
 	sort.Strings(declared)
 	sort.Strings(locked)
 	for _, u := range missingFrom(declared, locked) {
-		out = append(out, at("declares usage "+u+", which the lock does not record"))
+		out = append(out, at("declares usage "+usageText(u)+", which the lock does not record"))
 	}
 	for _, u := range missingFrom(locked, declared) {
-		out = append(out, at("the lock records usage "+u+", which "+project.ProjectFile+" no longer declares"))
+		out = append(out, at("the lock records usage "+usageText(u)+", which "+project.ProjectFile+" no longer declares"))
 	}
 	return out
+}
+
+// usageKey joins a usage's resource and constraint with a byte neither can
+// hold, so "a 1.0.0" with no constraint and "a" constrained to 1.0.0 differ.
+func usageKey(resource, constraint string) string {
+	return resource + "\x00" + constraint
+}
+
+// usageText renders a usageKey for a message.
+func usageText(key string) string {
+	resource, constraint, _ := strings.Cut(key, "\x00")
+	if constraint == "" {
+		return resource
+	}
+	return resource + " " + constraint
 }
 
 func installName(publisher, name string) string {
@@ -232,13 +250,6 @@ func installName(publisher, name string) string {
 		return name
 	}
 	return publisher + "/" + name
-}
-
-func usageText(resource, constraint string) string {
-	if constraint == "" {
-		return resource
-	}
-	return resource + " " + constraint
 }
 
 // missingFrom lists the sorted strings of a that b lacks.
