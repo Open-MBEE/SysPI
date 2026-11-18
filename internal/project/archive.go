@@ -313,16 +313,36 @@ func confinedTo(root, target string) error {
 // given creation time (CreatedTime honours SOURCE_DATE_EPOCH). The same
 // tree and time give byte-identical output.
 func Bundle(dir, out string, created time.Time) (*Meta, error) {
+	return BundleWithIndex(dir, out, created, "")
+}
+
+// BundleWithIndex accepts a model exporter's JSON map of symbols to member paths.
+func BundleWithIndex(dir, out string, created time.Time, indexFile string) (*Meta, error) {
 	if _, err := ReadProject(dir); err != nil {
 		return nil, err
 	}
-	// The output itself is not a member when it is written inside the project.
-	var skip []string
-	if absDir, err := filepath.Abs(dir); err == nil {
-		if absOut, err := filepath.Abs(out); err == nil {
-			if rel, err := filepath.Rel(absDir, absOut); err == nil && !strings.HasPrefix(rel, "..") {
-				skip = append(skip, filepath.ToSlash(rel))
-			}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	absOut, err := filepath.Abs(out)
+	if err != nil {
+		return nil, err
+	}
+	skip := []string{}
+	if rel, err := filepath.Rel(absDir, absOut); err == nil && filepath.IsLocal(rel) {
+		skip = append(skip, filepath.ToSlash(rel))
+	}
+	if indexFile != "" {
+		absIndex, err := filepath.Abs(indexFile)
+		if err != nil {
+			return nil, err
+		}
+		if rel, err := filepath.Rel(absOut, absIndex); err == nil && rel == "." {
+			return nil, fmt.Errorf("the bundle output cannot overwrite the model index")
+		}
+		if rel, err := filepath.Rel(absDir, absIndex); err == nil && filepath.IsLocal(rel) {
+			skip = append(skip, filepath.ToSlash(rel))
 		}
 	}
 	members, err := Members(dir, skip...)
@@ -339,7 +359,14 @@ func Bundle(dir, out string, created time.Time) (*Meta, error) {
 	if err := validateBundleMetamodel(declared.Metamodel, members); err != nil {
 		return nil, err
 	}
-	meta, err := GenerateMeta(dir, created, skip...)
+	var index map[string]string
+	if indexFile != "" {
+		index, err = readBundleIndex(indexFile, members)
+		if err != nil {
+			return nil, err
+		}
+	}
+	meta, err := generateMeta(dir, created, members, index)
 	if err != nil {
 		return nil, err
 	}

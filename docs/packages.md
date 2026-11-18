@@ -223,6 +223,8 @@ so a lock entry moves when no graph can keep it; as when its own constraint no l
 `install` leaves the copy the old entry placed under `lib/`. Only a version conflict is retried: a tag that is not a package, a
 checksum or digest mismatch and an unreachable source end the run. Offline, a conflict is reported
 from the lock; no repository is asked for another version.
+`install` and `lock` skip tags that fail constraints already discovered on the current search branch.
+`lock` also reuses verified VCS candidate metadata within a run to avoid repeating exports when backtracking.
 `install` verifies the installed copy's digest and fetches what is missing or changed.
 A lock is read as written: a repository `resource` in any spelling other than the canonical
 identity above, or a `usage` entry that is a bare string, is refused with the form this tool
@@ -298,6 +300,27 @@ another producer does not depend on its `metamodel`.
 checked-out git or hg revision, otherwise the current time; so a bundle of an unchanged checkout
 is byte-identical across runs. The output file is never a member of itself when written inside
 the project.
+
+### Model index from an exporter
+
+Use `syspi bundle -index index.json -o library.kpar .` to supply a JSON object
+whose keys are top-level model names and short names and whose values are
+archive-relative paths. For example, `{"Vehicle":"models/vehicles.sysml","v":"models/vehicles.sysml"}`.
+SysPI checks that every entry points to a model file in the bundle and omits the
+index input file from the archive. A model-aware exporter must establish that the
+names and short names are complete. Without `-index`, SysPI uses its textual
+package scanner.
+
+### Publish a KPAR
+
+Run `syspi publish library.kpar https://packages.example.org/library/1.0.0/library.kpar`
+against an artifact host that accepts HTTPS PUT and honors `If-None-Match: *`.
+Use a versioned URL and configure credentials in the netrc if needed. SysPI
+verifies the archive before upload and prints the canonical usage for it,
+`pkg:generic/<name>@<version>?checksum=sha256:<hex>&download_url=<url>`, which `syspi add`
+accepts as is and which pins the uploaded bytes. Credentials come from the netrc only and are
+never printed. This workflow uses a direct artifact URL and has no package discovery or
+version index.
 
 ## Credentials
 

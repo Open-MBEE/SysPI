@@ -1,0 +1,1 @@
+- A candidate reused within a `syspi lock` run claims its `lib/` slot again, so two packages installing under one name with different contents are still reported.

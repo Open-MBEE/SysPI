@@ -19,6 +19,8 @@ import (
 	"github.com/Open-MBEE/SysPI/internal/lock"
 	"github.com/Open-MBEE/SysPI/internal/origin"
 	"github.com/Open-MBEE/SysPI/internal/project"
+	"github.com/Open-MBEE/SysPI/internal/vcs"
+	"github.com/Open-MBEE/SysPI/internal/version"
 )
 
 // toolsArchive bundles a tools 3.1.0 archive with the given model text.
@@ -54,8 +56,17 @@ func TestBacktrackingForgetsRejectedArchiveChecksums(t *testing.T) {
 	id := "pkg:generic/tools?download_url=" + origin.Encode(srv.URL+"/tools.kpar")
 	declared := id + "&checksum=sha512:" + hex.EncodeToString(sum[:])
 
-	// widgets 1.1.0 needs base ^2.1.0 and the checksummed archive; 1.0.0 only the archive.
+	// widgets 1.1.0 needs the checksummed archive and, through mid, base ^2.1.0;
+	// 1.0.0 only the archive. The conflict surfaces after the archive is fetched.
 	root := t.TempDir()
+	mid := filepath.Join(root, "mid")
+	os.Mkdir(mid, 0o755)
+	git(t, mid, "init", "-q", "-b", "main")
+	write(t, mid, ".project.json", `{"name":"mid","publisher":"acme","version":"1.0.0","usage":[{"resource":"`+bres+`","versionConstraint":"^2.1.0"}]}`+"\n")
+	git(t, mid, "add", "-A")
+	git(t, mid, "commit", "-q", "-m", "1.0.0")
+	git(t, mid, "tag", "v1.0.0")
+	mres := "git+file://" + filepath.ToSlash(mid)
 	w := filepath.Join(root, "w")
 	os.Mkdir(w, 0o755)
 	git(t, w, "init", "-q", "-b", "main")
@@ -63,7 +74,7 @@ func TestBacktrackingForgetsRejectedArchiveChecksums(t *testing.T) {
 	git(t, w, "add", "-A")
 	git(t, w, "commit", "-q", "-m", "1.0.0")
 	git(t, w, "tag", "v1.0.0")
-	write(t, w, ".project.json", `{"name":"widgets","publisher":"acme","version":"1.1.0","usage":[{"resource":"`+declared+`"},{"resource":"`+bres+`","versionConstraint":"^2.1.0"}]}`+"\n")
+	write(t, w, ".project.json", `{"name":"widgets","publisher":"acme","version":"1.1.0","usage":[{"resource":"`+declared+`"},{"resource":"`+mres+`"}]}`+"\n")
 	git(t, w, "commit", "-q", "-am", "1.1.0")
 	git(t, w, "tag", "v1.1.0")
 	wres := "git+file://" + filepath.ToSlash(w)
@@ -247,5 +258,89 @@ func TestUpdateOfAnUnlockedUsageDoesNotBacktrack(t *testing.T) {
 	run(t, dir, Options{})
 	if got := lockedVersions(t, dir); got != "base 2.0.0,widgets 1.0.0" {
 		t.Fatalf("locked: %s", got)
+	}
+}
+
+type countingCandidateSource struct {
+	vcs.Source
+	exports int
+}
+
+func (s *countingCandidateSource) Revision(context.Context, vcs.Version) (string, error) {
+	return "fixed-revision", nil
+}
+
+func (s *countingCandidateSource) Export(_ context.Context, _ vcs.Version, dst string) error {
+	s.exports++
+	if err := os.Mkdir(dst, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dst, project.ProjectFile), []byte(`{"name":"base","version":"1.0.0"}`), 0o644)
+}
+
+func candidateFixture(t testing.TB) (*resolver, request, vcs.Version) {
+	t.Helper()
+	req, err := parseRequest(project.Usage{Resource: "git+https://example.org/base"}, project.ProjectFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := version.Parse("1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &resolver{ctx: context.Background(), opts: Options{LockOnly: true}, slots: map[string]slot{}}, req, vcs.Version{Tag: "v1.0.0", Version: v}
+}
+
+func TestLockReusesVerifiedCandidate(t *testing.T) {
+	r, req, candidate := candidateFixture(t)
+	source := &countingCandidateSource{}
+	for range 3 {
+		entry, err := r.resolveVCS(req.origin, req, nil, source, candidate)
+		if err != nil || entry.Version != "1.0.0" || entry.SHA256 == "" {
+			t.Fatalf("candidate = %+v, err = %v", entry, err)
+		}
+	}
+	if source.exports != 1 {
+		t.Fatalf("exported candidate %d times", source.exports)
+	}
+}
+
+// A reused candidate claims its lib/ slot again: backtracking released the first claim.
+func TestReusedLockCandidateClaimsItsSlot(t *testing.T) {
+	r, req, candidate := candidateFixture(t)
+	source := &countingCandidateSource{}
+	if _, err := r.resolveVCS(req.origin, req, nil, source, candidate); err != nil {
+		t.Fatal(err)
+	}
+	clear(r.slots)
+	dst := treePath(r.libDir, &project.Project{Name: "base", Version: "1.0.0"})
+	r.slots[dst] = slot{"pkg:generic/other?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fother", "0000"}
+	if _, err := r.resolveVCS(req.origin, req, nil, source, candidate); err == nil || !strings.Contains(err.Error(), "both install as") {
+		t.Fatalf("reused candidate ignored the claimed slot: %v", err)
+	}
+	if source.exports != 1 {
+		t.Fatalf("exported candidate %d times", source.exports)
+	}
+}
+
+func BenchmarkRepeatedLockCandidate(b *testing.B) {
+	for _, cached := range []bool{false, true} {
+		name := "fresh"
+		if cached {
+			name = "cached"
+		}
+		b.Run(name, func(b *testing.B) {
+			r, req, candidate := candidateFixture(b)
+			source := &countingCandidateSource{}
+			for b.Loop() {
+				if !cached {
+					r.lockCandidates = nil
+				}
+				if _, err := r.resolveVCS(req.origin, req, nil, source, candidate); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportMetric(float64(source.exports)/float64(b.N), "exports/op")
+		})
 	}
 }

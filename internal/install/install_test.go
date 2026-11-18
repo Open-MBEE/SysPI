@@ -509,6 +509,21 @@ func TestBacktrackingReplacesConflictingLockChoice(t *testing.T) {
 	runErr(t, invalid, Options{}, "the tag must equal the version")
 }
 
+func TestResolverPrunesKnownIncompatibleTags(t *testing.T) {
+	widgets, _ := fixture(t)
+	resource := "git+file://" + filepath.ToSlash(widgets)
+	dir := consumer(t,
+		project.Usage{Resource: resource, VersionConstraint: ">=1.0.0 <1.3.0"},
+		project.Usage{Resource: resource + "@1.0.0"},
+	)
+	// The highest tag has invalid metadata. The already queued exact constraint
+	// excludes it before SysPI tries to fetch and verify that version.
+	result, _ := run(t, dir, Options{})
+	if entry := result.Lock.Find(ident(t, resource)); entry == nil || entry.Version != "1.0.0" {
+		t.Fatalf("resolved widgets = %+v", entry)
+	}
+}
+
 func TestArchivesAndLocalDir(t *testing.T) {
 	pkg := t.TempDir()
 	write(t, pkg, ".project.json", `{"name":"tools","publisher":"acme","version":"3.1.0","usage":[{"resource":"https://www.omg.org/spec/SysML/20250201/Systems-Library.kpar"}]}`)

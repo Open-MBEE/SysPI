@@ -44,6 +44,7 @@ Commands:
   verify    check every installed copy under lib/ against the lock; exit 1 on a discrepancy
   list      print the locked packages and whether each installed copy is present
   bundle    build a deterministic .kpar from a project directory
+  publish   verify and upload a .kpar to an HTTPS artifact registry
   version   print the version
 
 A package is any git, svn or hg repository with .project.json at a tag, identified by an
@@ -93,6 +94,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdList(args[1:], stdout, stderr)
 	case "bundle":
 		err = cmdBundle(ctx, args[1:], stdout, stderr)
+	case "publish":
+		err = cmdPublish(ctx, args[1:], stdout, stderr)
 	case "version", "-version", "--version":
 		fmt.Fprintln(stdout, "syspi", Version)
 	default:
@@ -456,9 +459,10 @@ func refreshMeta(dir string) error {
 }
 
 func cmdBundle(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	fs := newFlagSet("bundle", stderr, "[-o out.kpar] [-tag <tag>] <dir>")
+	fs := newFlagSet("bundle", stderr, "[-o out.kpar] [-tag <tag>] [-index index.json] <dir>")
 	out := fs.String("o", "", "output path (default <publisher>-<name>_<version>.kpar in the current directory)")
 	tag := fs.String("tag", "", "tag to check against .project.json's version (default: the checked-out git/hg tag of <dir>, when any)")
+	index := fs.String("index", "", "JSON map of model names and short names to archive paths")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
@@ -487,7 +491,7 @@ func cmdBundle(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if *out == "" {
 		*out = p.InstallName() + project.ArchiveExt
 	}
-	meta, err := project.Bundle(dir, *out, createdFor(ctx, dir))
+	meta, err := project.BundleWithIndex(dir, *out, createdFor(ctx, dir), *index)
 	if err != nil {
 		return err
 	}
@@ -497,6 +501,23 @@ func cmdBundle(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	}
 	a.Close()
 	fmt.Fprintf(stdout, "wrote %s (%d members, sha256 %s, created %s)\n", *out, len(a.Members), a.SHA256, meta.Created)
+	return nil
+}
+
+func cmdPublish(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := newFlagSet("publish", stderr, "<archive.kpar> <https-url.kpar>")
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() != 2 {
+		fs.Usage()
+		return errUsage
+	}
+	usage, err := project.PublishArchive(ctx, nil, fs.Arg(0), fs.Arg(1))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "published %s\n", usage)
 	return nil
 }
 
