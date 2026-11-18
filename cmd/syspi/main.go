@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"text/tabwriter"
 	"time"
 
 	"github.com/Open-MBEE/SysPI/internal/install"
@@ -41,6 +42,7 @@ Commands:
   sync      same as install
   lock      resolve and write .project.lock.json without installing
   verify    check every installed copy under lib/ against the lock; exit 1 on a discrepancy
+  list      print the locked packages and whether each installed copy is present
   bundle    build a deterministic .kpar from a project directory
   version   print the version
 
@@ -87,6 +89,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdInstall(ctx, args[0], args[1:], stdout, stderr, true)
 	case "verify":
 		err = cmdVerify(args[1:], stdout, stderr)
+	case "list":
+		err = cmdList(args[1:], stdout, stderr)
 	case "bundle":
 		err = cmdBundle(ctx, args[1:], stdout, stderr)
 	case "version", "-version", "--version":
@@ -381,6 +385,50 @@ func cmdVerify(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "%d package(s) checked against %s: no discrepancy\n", n, project.LockFile)
 	}
 	return nil
+}
+
+func cmdList(args []string, stdout, stderr io.Writer) error {
+	var c commonFlags
+	fs := newFlagSet("list", stderr, "[flags]")
+	c.bind(fs)
+	asJSON := fs.Bool("json", false, "print the listing as a JSON array")
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		fs.Usage()
+		return errUsage
+	}
+	ls, err := install.List(c.dir)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		enc := json.NewEncoder(stdout)
+		enc.SetEscapeHTML(false)
+		enc.SetIndent("", "  ")
+		return enc.Encode(ls)
+	}
+	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "RESOURCE\tVERSION\tKIND\tREVISION\tPATH\tSTATE")
+	for i := range ls {
+		l := &ls[i]
+		kind, rev, path := l.Kind, l.Revision, l.Path
+		if l.Kind == "vcs" {
+			kind = l.VCS
+		}
+		for _, p := range []*string{&rev, &path} {
+			if *p == "" {
+				*p = "-"
+			}
+		}
+		ver := l.Version
+		if ver == "" {
+			ver = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", l.Resource, ver, kind, rev, path, l.State())
+	}
+	return tw.Flush()
 }
 
 func report(w io.Writer, res *install.Result) {

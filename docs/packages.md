@@ -263,6 +263,13 @@ is what the lock recorded: its `.project.json` (publisher, name, version), every
 `usage` the lock entry recorded. Every discrepancy is printed, one per line, and the exit status
 is 1 when there is any. Standard libraries are never installed, so there is nothing to check.
 
+`syspi list` prints the lock in resource order — one line per package with its version, kind
+(the VCS of an exported tree), revision, path under `lib/` and whether that copy is present —
+and `syspi list -json` the same as an array of objects (`resource`, `kind`, `publisher`, `name`,
+`version`, `vcs`, `tag`, `revision`, `source`, `path`, `installed`). Standard libraries and local
+directories have no path: they are recorded, never installed. `list` reads only the lock and
+`lib/`; it never contacts a repository.
+
 ## Bundle reproducibility
 
 SysPI writes one SHA-256 checksum object per path, as defined by the KerML

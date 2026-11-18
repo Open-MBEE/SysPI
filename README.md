@@ -74,6 +74,7 @@ syspi outdated [-json] [<resource>...]                        report what update
 syspi install | sync                                          resolve .project.json + lock, install what is missing or changed
 syspi lock                                                    write .project.lock.json without installing
 syspi verify                                                  check lib/ against the lock, offline; exit 1 on any discrepancy, write nothing
+syspi list [-json]                                            the locked packages, where each is in lib/ and whether it is present
 syspi bundle [-o out.kpar] [-tag T] <dir>                     deterministic .kpar; checks tag == version in a tagged checkout
 ```
 
