@@ -610,6 +610,7 @@ func TestHostedArchive(t *testing.T) {
 	tools := filepath.Join(root, "tools")
 	write(t, tools, ".project.json", "{\n  \"name\": \"tools\",\n  \"publisher\": \"acme\",\n  \"version\": \"3.0.0\"\n}\n")
 	write(t, tools, "Tools.sysml", "package Tools {\n  part def Tool;\n}\n")
+	write(t, tools, ".meta.json", sysmlBundleMeta)
 	served := filepath.Join(root, "served")
 	os.MkdirAll(served, 0o755)
 	kpar := filepath.Join(served, "release.kpar")
