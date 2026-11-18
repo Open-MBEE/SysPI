@@ -39,7 +39,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          choco install -y --no-progress hg sliksvn
+          # The community feed answers 503 now and then; a failed choco must fail the step, not the next one.
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            choco install -y --no-progress hg sliksvn
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($attempt -eq 3) { throw "choco install failed $attempt times (last exit code $LASTEXITCODE)" }
+            Start-Sleep -Seconds (30 * $attempt)
+          }
           Add-Content $env:GITHUB_PATH 'C:\Program Files\Mercurial'
           Add-Content $env:GITHUB_PATH 'C:\Program Files\SlikSvn\bin'
       - name: Versions

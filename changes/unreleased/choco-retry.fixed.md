@@ -1,0 +1,1 @@
+- The Windows CI and release gates retry a failed Chocolatey install of `hg` and `sliksvn` and fail that step itself, instead of letting a transient feed error surface as `svn: command not found` later.
