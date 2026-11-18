@@ -329,22 +329,21 @@ func Bundle(dir, out string, created time.Time) (*Meta, error) {
 	if err != nil {
 		return nil, err
 	}
-	sourceMeta, exists, err := ReadMeta(dir)
+	declared, exists, err := ReadMeta(dir)
 	if err != nil {
 		return nil, err
 	}
-	var metamodel string
-	if exists {
-		metamodel = sourceMeta.Metamodel
+	if !exists {
+		declared = &Meta{}
 	}
-	if err := validateBundleMetamodel(metamodel, members); err != nil {
+	if err := validateBundleMetamodel(declared.Metamodel, members); err != nil {
 		return nil, err
 	}
 	meta, err := GenerateMeta(dir, created, skip...)
 	if err != nil {
 		return nil, err
 	}
-	meta.Metamodel = metamodel
+	meta.KeepDeclared(declared)
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	names := append([]string{MetaFile}, members...)

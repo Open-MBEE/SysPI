@@ -232,6 +232,7 @@ func TestBundleMetamodel(t *testing.T) {
 		{name: "malformed", member: "model.sysml", metamodel: "invalid URI", wantError: true},
 		{name: "unversioned", member: "model.sysml", metamodel: "https://www.omg.org/spec/SysML/2.0", wantError: true},
 		{name: "wrong language", member: "model.sysml", metamodel: kerml, wantError: true},
+		{name: "another SysML version", member: "model.sysml", metamodel: "https://www.omg.org/spec/SysML/20991231"},
 		{name: "KerML default", member: "model.kerml"},
 		{name: "JSON SysML", member: "model.json", metamodel: sysml},
 		{name: "XMI KerML", member: "model.xmi", metamodel: kerml},
@@ -267,6 +268,41 @@ func TestBundleMetamodel(t *testing.T) {
 				t.Errorf("bundle metamodel = %q, want %q", a.Meta.Metamodel, tc.metamodel)
 			}
 		})
+	}
+}
+
+// Bundling keeps every declaration of the source metadata that no file implies.
+func TestBundleKeepsDeclaredFlags(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, ProjectFile, `{"name":"model","version":"1.0.0"}`)
+	writeFile(t, dir, "model.json", "[]")
+	writeFile(t, dir, MetaFile, `{"index":{},"created":"2000-01-01T00:00:00Z","includesDerived":true,"includesImplied":false}`)
+	out := filepath.Join(t.TempDir(), "model.kpar")
+	if _, err := Bundle(dir, out, time.Unix(0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	a, err := OpenArchive(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if d, i := a.Meta.IncludesDerived, a.Meta.IncludesImplied; d == nil || !*d || i == nil || *i {
+		t.Errorf("includesDerived = %v, includesImplied = %v", d, i)
+	}
+}
+
+// The metamodel rule binds what bundle writes, not what a reader accepts.
+func TestOpenArchiveAnyMetamodel(t *testing.T) {
+	for _, metamodel := range []string{"", `,"metamodel":"https://www.omg.org/spec/SysML/2.0"`, `,"metamodel":"https://www.omg.org/spec/KerML/20250201"`} {
+		a, err := OpenArchive(rawZip(t, map[string]string{
+			ProjectFile:   `{"name":"model","version":"1.0.0"}`,
+			MetaFile:      `{"index":{},"created":"2000-01-01T00:00:00Z"` + metamodel + `}`,
+			"model.sysml": "package Model;\n",
+		}))
+		if err != nil {
+			t.Fatalf("metamodel %q: %v", metamodel, err)
+		}
+		a.Close()
 	}
 }
 

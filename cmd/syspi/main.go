@@ -451,8 +451,7 @@ func refreshMeta(dir string) error {
 	if err != nil {
 		return err
 	}
-	// What the author declared is not derived from the files; carry it over.
-	m.Metamodel, m.IncludesDerived, m.IncludesImplied = old.Metamodel, old.IncludesDerived, old.IncludesImplied
+	m.KeepDeclared(old)
 	return m.Write(dir)
 }
 

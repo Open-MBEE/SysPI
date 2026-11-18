@@ -277,11 +277,14 @@ interchange JSON schema. It also reads the array form described by Table 13
 and used in earlier SysPI bundles. Rebuilding an older bundle changes its
 archive SHA-256, so update its lock pin when replacing the original artifact.
 
-Before running `syspi bundle` on a SysML 2.0 project, set `metamodel` in the
-project's `.meta.json` to `https://www.omg.org/spec/SysML/20250201`. SysPI
-copies the declaration into the archive metadata and requires it for bundles
-with `.sysml` members. For JSON or XMI model files, declare the metamodel
-explicitly because the file extension is shared across languages.
+Before running `syspi bundle` on a SysML project, set `metamodel` in the
+project's `.meta.json` to the versioned SysML URI, `https://www.omg.org/spec/SysML/20250201`
+for SysML 2.0. SysPI copies `metamodel`, `includesDerived` and `includesImplied` into the
+archive metadata, and refuses a bundle with `.sysml` members whose `metamodel` is missing or is
+not `https://www.omg.org/spec/SysML/` followed by an eight-digit date stamp. For JSON or XMI
+model files, declare the metamodel explicitly because the file extension is shared across
+languages. The rule applies to what `bundle` writes: installing or verifying an archive from
+another producer does not depend on its `metamodel`.
 
 `syspi bundle` writes members sorted with fixed 1980-01-01 ZIP timestamps and regenerates
 `.meta.json`. Its `created` time is `SOURCE_DATE_EPOCH` when set, otherwise the commit time of the
