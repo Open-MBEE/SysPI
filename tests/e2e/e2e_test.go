@@ -316,6 +316,146 @@ func TestEndToEnd(t *testing.T) {
 	}
 }
 
+// sshStandIn writes a program git runs in place of ssh: it records the
+// destination it is given and runs the remote command on this machine.
+func sshStandIn(t *testing.T, root string) (program, log string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the ssh stand-in is a POSIX shell script")
+	}
+	program, log = filepath.Join(root, "ssh-stand-in"), filepath.Join(root, "ssh.log")
+	script := "#!/bin/sh\nfor a; do command=$a; done\necho \"$1\" >> '" + log + "'\nexec sh -c \"$command\"\n"
+	if err := os.WriteFile(program, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return program, log
+}
+
+// A git+ssh usage written with a user name and one written without are two
+// identities, each fetched through its own address, sharing one lib/ directory.
+func TestSSHUserName(t *testing.T) {
+	requireOrSkip(t, "git")
+	bin := syspiBinary(t)
+	root := t.TempDir()
+	repo := filepath.ToSlash(gitFixture(t, root))
+	ssh, sshLog := sshStandIn(t, root)
+	env := []string{"GIT_SSH_COMMAND=" + ssh, "GIT_SSH_VARIANT=simple"}
+	noSSH := []string{"GIT_SSH_COMMAND=false", "GIT_SSH_VARIANT=simple"}
+	withUser, without := "git+ssh://git@fixture.invalid"+repo, "git+ssh://fixture.invalid"+repo
+	destinations := func() string {
+		b, _ := os.ReadFile(sshLog)
+		os.Remove(sshLog)
+		return strings.Join(strings.Fields(string(b)), " ")
+	}
+	read := func(app, name string) string {
+		b, err := os.ReadFile(filepath.Join(app, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	identity := func(res string) string {
+		o, err := origin.Parse(res)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return o.Identity()
+	}
+
+	app := filepath.Join(root, "app")
+	os.MkdirAll(app, 0o755)
+	sh(t, app, bin, "init", "-name", "app")
+	if out, err := shErr(app, env, bin, "add", withUser+"@1.0.0"); err != nil {
+		t.Fatalf("add %s: %v\n%s", withUser, err, out)
+	}
+	if got := destinations(); got == "" || strings.ReplaceAll(got, "git@fixture.invalid", "") != strings.Repeat(" ", strings.Count(got, " ")) {
+		t.Errorf("ssh was given %q, want git@fixture.invalid every time", got)
+	}
+	if want := "\"resource\": \"" + identity(withUser) + "%401.0.0\""; !strings.Contains(read(app, ".project.json"), want) || !strings.Contains(want, "git%2Bssh:%2F%2Fgit%40fixture.invalid%2F") {
+		t.Errorf(".project.json lacks %s:\n%s", want, read(app, ".project.json"))
+	}
+	lk := read(app, ".project.lock.json")
+	if got, want := lockField(t, lk, withUser, "source"), "ssh://git@fixture.invalid"+repo; got != want {
+		t.Errorf("source %q, want %q", got, want)
+	}
+	if strings.Contains(lk, identity(without)+"\"") {
+		t.Errorf("the lock holds the identity without the user name:\n%s", lk)
+	}
+	lib, err := os.ReadDir(filepath.Join(app, "lib"))
+	if err != nil || len(lib) != 1 || lib[0].Name() != "acme-widgets_1.0.0" {
+		t.Fatalf("lib/ = %v %v, want acme-widgets_1.0.0 only", lib, err)
+	}
+
+	// Same spelling again: matched in the lock, lib/ reused, no connection.
+	out, err := shErr(app, noSSH, bin, "install", "-offline")
+	if err != nil || !strings.Contains(out, "0 installed, 1 already present") {
+		t.Fatalf("install -offline: %v\n%s", err, out)
+	}
+
+	// The other spelling is another identity: its own fetch and lock entry, the same directory.
+	if out, err := shErr(app, env, bin, "add", without+"@1.0.0"); err != nil {
+		t.Fatalf("add %s: %v\n%s", without, err, out)
+	}
+	if got := destinations(); got == "" || strings.Contains(got, "@") {
+		t.Errorf("ssh was given %q, want fixture.invalid without a user name", got)
+	}
+	lk = read(app, ".project.lock.json")
+	for _, f := range []string{"sha256", "revision", "version"} {
+		if a, b := lockField(t, lk, withUser, f), lockField(t, lk, without, f); a == "" || a != b {
+			t.Errorf("%s differs between the two identities: %q vs %q", f, a, b)
+		}
+	}
+	if got, want := lockField(t, lk, without, "source"), "ssh://fixture.invalid"+repo; got != want {
+		t.Errorf("source %q, want %q", got, want)
+	}
+	if lib, _ := os.ReadDir(filepath.Join(app, "lib")); len(lib) != 1 {
+		t.Errorf("lib/ holds %d entries, want the one shared directory", len(lib))
+	}
+	if out, err := shErr(app, noSSH, bin, "install", "-offline"); err != nil || !strings.Contains(out, "0 installed, 2 already present") {
+		t.Fatalf("install -offline with both spellings: %v\n%s", err, out)
+	}
+
+	// A lock entry of one spelling does not satisfy a usage of the other.
+	other := filepath.Join(root, "other")
+	os.MkdirAll(other, 0o755)
+	sh(t, other, bin, "init", "-name", "other")
+	if out, err := shErr(other, env, bin, "add", withUser+"@1.0.0"); err != nil {
+		t.Fatalf("add: %v\n%s", err, out)
+	}
+	manifest := read(other, ".project.json")
+	write(t, other, ".project.json", strings.Replace(manifest, "git%40fixture.invalid", "fixture.invalid", 1))
+	out, err = shErr(other, noSSH, bin, "install", "-offline")
+	if err == nil || !strings.Contains(out, "offline and "+identity(without)+" is not installed") {
+		t.Fatalf("install -offline after dropping the user name: %v\n%s", err, out)
+	}
+	destinations()
+	if out, err := shErr(other, env, bin, "install"); err != nil {
+		t.Fatalf("install: %v\n%s", err, out)
+	}
+	if got := destinations(); got == "" || strings.Contains(got, "@") {
+		t.Errorf("ssh was given %q, want fixture.invalid without a user name", got)
+	}
+	if lk := read(other, ".project.lock.json"); strings.Contains(lk, "git%40") || lockField(t, lk, without, "version") != "1.0.0" {
+		t.Errorf("the lock was not rewritten for the new identity:\n%s", lk)
+	}
+
+	// A user name on another transport, and a password, never reach git.
+	for res, want := range map[string]string{
+		"git+file://git@" + repo + "@1.0.0":            "a user name in the host is accepted only on git+ssh",
+		"git+https://git@fixture.invalid/a/b@1.0.0":    "a user name in the host is accepted only on git+ssh",
+		"pkg:git/git@fixture.invalid/a/b@1.0.0":        "a user name in the host is accepted only on git+ssh",
+		"git+ssh://git:hunter2@fixture.invalid" + repo: "a password in the host is not supported",
+	} {
+		out, err := shErr(app, env, bin, "add", res)
+		if err == nil || !strings.Contains(out, want) || strings.Contains(out, "hunter2@") && !strings.Contains(out, "resource \"") {
+			t.Errorf("add %s: %v\n%s\nwant %q", res, err, out, want)
+		}
+	}
+	if got := destinations(); got != "" {
+		t.Errorf("a refused resource reached ssh: %q", got)
+	}
+}
+
 func TestSameTreeFromGitHgSvn(t *testing.T) {
 	requireOrSkip(t, "git", "hg", "svn", "svnadmin")
 	bin := syspiBinary(t)

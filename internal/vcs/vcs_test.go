@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/Open-MBEE/SysPI/internal/digest"
+	"github.com/Open-MBEE/SysPI/internal/origin"
 	"github.com/Open-MBEE/SysPI/internal/version"
 )
 
@@ -239,6 +241,17 @@ func TestRedactAndCheckedOutTime(t *testing.T) {
 	if got := redact("git clone -- https://user:secret@host/repo.git"); got != "git clone -- https://***@host/repo.git" {
 		t.Fatalf("redact = %q", got)
 	}
+	for in, want := range map[string]string{
+		"git ls-remote --tags -- ssh://git@host/repo.git":    "git ls-remote --tags -- ssh://git@host/repo.git",
+		"svn ls -- svn+ssh://svn@host/repo/tags":             "svn ls -- svn+ssh://svn@host/repo/tags",
+		"git clone -- ssh://git:secret@host/repo.git":        "git clone -- ssh://***@host/repo.git",
+		"fatal: unable to access 'https://token@host/repo/'": "fatal: unable to access 'https://***@host/repo/'",
+		"git@host: Permission denied (publickey).":           "git@host: Permission denied (publickey).",
+	} {
+		if got := redact(in); got != want {
+			t.Errorf("redact(%q) = %q, want %q", in, got, want)
+		}
+	}
 	src, _ := Open("git", "https://user:secret@no-such-host.invalid/repo.git")
 	if _, err := src.ListVersions(context.Background()); err == nil || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("credentials in error: %v", err)
@@ -264,5 +277,60 @@ func TestGitRefusals(t *testing.T) {
 	src, _ = Open("git", bare)
 	if err := src.Export(ctx, Version{Tag: "nope"}, filepath.Join(t.TempDir(), "out")); err == nil {
 		t.Fatal("unknown tag exported")
+	}
+}
+
+// fakeTools puts git, hg and svn stand-ins first on PATH; each appends its
+// arguments, one per line and a blank line after, to the returned log and fails.
+func fakeTools(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in executables are POSIX shell scripts")
+	}
+	dir := t.TempDir()
+	log := filepath.Join(dir, "argv.log")
+	script := "#!/bin/sh\n{ printf '%s\\n' \"$(basename \"$0\")\" \"$@\"; echo; } >> '" + log + "'\necho 'stand-in: no such repository' >&2\nexit 1\n"
+	for _, name := range []string{"git", "hg", "svn"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return log
+}
+
+// The user name of a <vcs>+ssh location reaches each executable inside the
+// address, after "--", and nowhere else on the command line.
+func TestSSHUserNameArgv(t *testing.T) {
+	log := fakeTools(t)
+	ctx := context.Background()
+	for _, tc := range []struct{ resource, argv, shown string }{
+		{"git+ssh://git@github.com/Open-MBEE/OpenSysML-Extensions-Library@1.0.0",
+			"git\nls-remote\n--tags\n--\nssh://git@github.com/Open-MBEE/OpenSysML-Extensions-Library\n",
+			"git ls-remote --tags -- ssh://git@github.com/Open-MBEE/OpenSysML-Extensions-Library: stand-in: no such repository"},
+		{"svn+ssh://svn@svn.example.org/repos/pkg",
+			"svn\nls\n--non-interactive\n--\nsvn+ssh://svn@svn.example.org/repos/pkg/tags\n",
+			"svn ls --non-interactive -- svn+ssh://svn@svn.example.org/repos/pkg/tags: stand-in: no such repository"},
+		{"hg+ssh://hg@hg.example.org/models/rover",
+			"hg\n--noninteractive\nclone\n--quiet\n--noupdate\n--\nssh://hg@hg.example.org/models/rover\n",
+			"-- ssh://hg@hg.example.org/models/rover "},
+	} {
+		os.Remove(log)
+		o, err := origin.Parse(tc.resource)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src, err := Open(o.VCS, o.Source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = src.ListVersions(ctx)
+		if err == nil || !strings.Contains(err.Error(), tc.shown) {
+			t.Errorf("%s: error %v\n want it to hold %q", tc.resource, err, tc.shown)
+		}
+		got, _ := os.ReadFile(log)
+		if !strings.HasPrefix(string(got), tc.argv) || strings.Count(string(got), "@") != 1 {
+			t.Errorf("%s: argv\n%s\nwant prefix\n%s", tc.resource, got, tc.argv)
+		}
 	}
 }
