@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -34,6 +35,8 @@ Commands:
   init      write .project.json and .meta.json for a new package
   add       add a usage to .project.json, then resolve, install and lock
   remove    drop a usage from .project.json, re-lock, remove what nothing else needs from lib/
+  update    move the named (or all) usages to the highest version their constraints allow, install, re-lock
+  outdated  report what update would move; write nothing
   install   resolve .project.json and the lock, install what is missing or changed
   sync      same as install
   lock      resolve and write .project.lock.json without installing
@@ -68,6 +71,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdAdd(ctx, args[1:], stdout, stderr)
 	case "remove":
 		err = cmdRemove(ctx, args[1:], stdout, stderr)
+	case "update":
+		err = cmdUpdate(ctx, args[1:], stdout, stderr)
+	case "outdated":
+		err = cmdOutdated(ctx, args[1:], stdout, stderr)
 	case "install", "sync":
 		err = cmdInstall(ctx, args[0], args[1:], stdout, stderr, false)
 	case "lock":
@@ -266,6 +273,60 @@ func cmdRemove(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	}
 	report(stdout, res)
 	return refreshMeta(c.dir)
+}
+
+func cmdUpdate(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	var c commonFlags
+	fs := newFlagSet("update", stderr, "[flags] [<resource>...]")
+	c.bind(fs)
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	res, err := install.Update(ctx, c.options(stderr, false), fs.Args())
+	if err != nil {
+		return err
+	}
+	for i := range res.Changes {
+		fmt.Fprintln(stdout, res.Changes[i].Describe())
+	}
+	if len(res.Changes) == 0 {
+		fmt.Fprintln(stdout, "every package is at the highest version its constraint allows; nothing moved")
+	}
+	for _, p := range res.Pruned {
+		fmt.Fprintf(stdout, "removed %s\n", p)
+	}
+	report(stdout, res)
+	return nil
+}
+
+func cmdOutdated(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	var c commonFlags
+	fs := newFlagSet("outdated", stderr, "[flags] [<resource>...]")
+	c.bind(fs)
+	asJSON := fs.Bool("json", false, "print the changes as a JSON array")
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	res, err := install.Outdated(ctx, c.options(stderr, false), fs.Args())
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		enc := json.NewEncoder(stdout)
+		enc.SetEscapeHTML(false)
+		enc.SetIndent("", "  ")
+		if res.Changes == nil {
+			res.Changes = []install.Change{}
+		}
+		return enc.Encode(res.Changes)
+	}
+	for i := range res.Changes {
+		fmt.Fprintln(stdout, res.Changes[i].Describe())
+	}
+	if len(res.Changes) == 0 && !c.quiet {
+		fmt.Fprintln(stdout, "every package is at the highest version its constraint allows")
+	}
+	return nil
 }
 
 func cmdInstall(ctx context.Context, name string, args []string, stdout, stderr io.Writer, lockOnly bool) error {

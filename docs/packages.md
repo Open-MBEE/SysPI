@@ -131,6 +131,16 @@ published into `lib/` only after every usage resolved and verified; a failing ru
 and the lock as they were. A lock entry wins over the constraint in `.project.json` as long as it satisfies it;
 `install` then verifies the installed copy's digest and fetches only what is missing or changed.
 
+`update` is the one command that moves a lock entry. `syspi update [<resource>…]` re-resolves the
+named usages of `.project.json` — every repository of the closure when none is named — to the
+highest tagged version that satisfies their constraints, ignoring the lock; whatever moved is
+installed, the lock rewritten, and the copies the moved entries left under `lib/` removed as
+`remove` removes them. Every other command (`add`, `install`, `sync`, `lock`, `remove`) keeps a
+lock entry that satisfies its constraint. `syspi outdated [-json] [<resource>…]` resolves the same
+way and reports each entry that would move (`name old -> new`, plus entries the move would add or
+drop), writing nothing. Archives, local directories and standard libraries have no versions to
+choose from: their usage names what they are, and `update` leaves them.
+
 ## Install layout
 
 ```

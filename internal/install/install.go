@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/Open-MBEE/SysPI/internal/digest"
@@ -41,6 +42,14 @@ type Options struct {
 	// Prune removes from lib/ the installed copies the previous lock placed
 	// there that the new lock no longer claims (see Remove).
 	Prune bool
+	// Update names, by repository key, the usages re-resolved to the highest
+	// version their constraint allows, ignoring the lock; UpdateAll does so
+	// for every repository of the closure (see Update and Outdated).
+	Update    []string
+	UpdateAll bool
+	// DryRun resolves as LockOnly does but writes nothing: the Result
+	// carries the lock the run would have written.
+	DryRun bool
 }
 
 // Result reports what a run did.
@@ -54,6 +63,19 @@ type Result struct {
 	RemovedUsages []string
 	// Pruned lists the lib/ paths (relative to Root) a pruning run removed.
 	Pruned []string
+	// Changes lists, in resource order, every lock entry the run moved,
+	// added or dropped against the previous lock.
+	Changes []Change
+}
+
+// Change is one lock entry that differs between the previous and the new lock.
+type Change struct {
+	Resource string `json:"resource"`
+	Name     string `json:"name,omitempty"`
+	// From and To are the versions before and after; one is empty for an
+	// entry only one of the locks has.
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
 }
 
 type request struct {
@@ -112,6 +134,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	opts.Root = root
+	if opts.DryRun {
+		opts.LockOnly = true
+	}
 	proj, err := project.ReadProject(root)
 	if err != nil {
 		return nil, err
@@ -143,6 +168,11 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		if err := r.resolve(req); err != nil {
 			return nil, err
 		}
+	}
+	r.res.Changes = changes(r.old, r.fresh)
+	if opts.DryRun {
+		r.res.Lock = r.fresh
+		return r.res, nil
 	}
 	// Everything resolved and verified: publish the staged packages, then
 	// the lock, restoring every replaced package if any step fails.
@@ -349,12 +379,12 @@ func (r *resolver) archivePath(p *project.Project) string {
 // installArchive stages a verified archive for lib/ unless an identical
 // copy is already there, and queues its usages.
 func (r *resolver) installArchive(e *lock.Entry, a *project.Archive, src string) error {
-	if r.opts.LockOnly {
-		return r.enqueueUsages(e, a.Project)
-	}
 	dst := r.archivePath(a.Project)
 	if err := r.claim(dst, e.Resource, a.SHA256); err != nil {
 		return err
+	}
+	if r.opts.LockOnly {
+		return r.enqueueUsages(e, a.Project)
 	}
 	if cur, err := digest.File(dst); (err == nil && cur == a.SHA256) || r.alreadyStaged(dst) {
 		r.res.Reused = append(r.res.Reused, e.Resource)
@@ -454,10 +484,10 @@ func (r *resolver) reuseLocked(old *lock.Entry) (*lock.Entry, bool, error) {
 	dst := filepath.Join(r.libDir, stem+project.ArchiveExt)
 	cur, err := digest.File(dst)
 	if r.opts.LockOnly || (err == nil && cur == old.SHA256) {
+		if err := r.claim(dst, old.Resource, old.SHA256); err != nil {
+			return nil, false, err
+		}
 		if !r.opts.LockOnly {
-			if err := r.claim(dst, old.Resource, old.SHA256); err != nil {
-				return nil, false, err
-			}
 			r.res.Reused = append(r.res.Reused, old.Resource)
 		}
 		e := *old
@@ -572,6 +602,66 @@ func treePath(libDir string, p *project.Project) string {
 
 // installedTreeMatches reports whether dir holds a tree with the locked
 // digest, ignoring a .meta.json this tool generated.
+// updating reports whether the lock is ignored for this repository: the
+// run updates everything, or named this usage's repository.
+func (r *resolver) updating(o *origin.Origin) bool {
+	if r.opts.UpdateAll {
+		return true
+	}
+	for _, k := range r.opts.Update {
+		if k == o.Key() {
+			return true
+		}
+	}
+	return false
+}
+
+// latest opens the repository and selects the highest tagged version that
+// satisfies the request's constraint.
+func (r *resolver) latest(o *origin.Origin, req request) (vcs.Source, vcs.Version, error) {
+	src, err := vcs.Open(o.VCS, o.Source)
+	if err != nil {
+		return nil, vcs.Version{}, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
+	}
+	vs, err := src.ListVersions(r.ctx)
+	if err != nil {
+		return nil, vcs.Version{}, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
+	}
+	sel, err := vcs.Select(vs, req.constraint)
+	if err != nil {
+		return nil, vcs.Version{}, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
+	}
+	return src, sel, nil
+}
+
+// changes diffs two locks by repository key (the old lock's resources are
+// already keyed): every entry moved, added or dropped.
+func changes(old, fresh *lock.Lock) []Change {
+	var out []Change
+	seen := map[string]bool{}
+	for i := range fresh.Packages {
+		e := &fresh.Packages[i]
+		k := repositoryKey(e.Resource)
+		seen[k] = true
+		c := Change{Resource: e.Resource, Name: e.Name, To: e.Version}
+		if o := old.Find(k); o != nil {
+			if o.Version == e.Version {
+				continue
+			}
+			c.From = o.Version
+		}
+		out = append(out, c)
+	}
+	for i := range old.Packages {
+		e := &old.Packages[i]
+		if !seen[repositoryKey(e.Resource)] {
+			out = append(out, Change{Resource: e.Resource, Name: e.Name, From: e.Version})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Resource < out[j].Resource })
+	return out
+}
+
 func installedTreeMatches(dir string, old *lock.Entry) bool {
 	if _, err := os.Stat(filepath.Join(dir, project.ProjectFile)); err != nil {
 		return false
@@ -587,6 +677,23 @@ func installedTreeMatches(dir string, old *lock.Entry) bool {
 func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error) {
 	id := o.Identity()
 	old := r.lockedRepository(o, req.constraint)
+	var src vcs.Source
+	var sel vcs.Version
+	if old != nil && r.updating(o) {
+		if r.opts.Offline {
+			return nil, fmt.Errorf("%s: usage %q: offline; looking for a newer version of %s needs the repository", req.requester, req.resource, id)
+		}
+		var err error
+		if src, sel, err = r.latest(o, req); err != nil {
+			return nil, err
+		}
+		if sel.Version.String() != old.Version {
+			old = nil
+		} else {
+			// Already at the top: the locked tag, not another spelling of the same version.
+			sel = vcs.Version{Tag: old.Tag, Version: sel.Version}
+		}
+	}
 	if old != nil && !r.opts.LockOnly {
 		stem := (&project.Project{Name: old.Name, Publisher: old.Publisher, Version: old.Version}).InstallName()
 		dst := filepath.Join(r.libDir, stem)
@@ -601,6 +708,9 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 		}
 	}
 	if old != nil && r.opts.LockOnly {
+		if err := r.claim(treePath(r.libDir, &project.Project{Name: old.Name, Publisher: old.Publisher, Version: old.Version}), id, old.SHA256); err != nil {
+			return nil, err
+		}
 		e := *old
 		e.Resource, e.Source, e.Usage = id, o.Source, nil
 		return &e, r.requeueLocked(&e, old)
@@ -608,21 +718,19 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 	if r.opts.Offline {
 		return nil, fmt.Errorf("%s: usage %q: offline and %s is not installed under %s", req.requester, req.resource, id, project.LibDir)
 	}
-	src, err := vcs.Open(o.VCS, o.Source)
-	if err != nil {
-		return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
-	}
-	var sel vcs.Version
-	if old != nil {
-		v, _ := version.Parse(old.Version)
-		sel = vcs.Version{Tag: old.Tag, Version: v}
-	} else {
-		vs, err := src.ListVersions(r.ctx)
-		if err != nil {
+	var err error
+	switch {
+	case src != nil:
+		// Opened and selected above: the lock is being moved.
+	case old != nil:
+		if src, err = vcs.Open(o.VCS, o.Source); err != nil {
 			return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
 		}
-		if sel, err = vcs.Select(vs, req.constraint); err != nil {
-			return nil, fmt.Errorf("%s: usage %q: %v", req.requester, req.resource, err)
+		v, _ := version.Parse(old.Version)
+		sel = vcs.Version{Tag: old.Tag, Version: v}
+	default:
+		if src, sel, err = r.latest(o, req); err != nil {
+			return nil, err
 		}
 	}
 	revision, err := src.Revision(r.ctx, sel)
@@ -688,6 +796,10 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 		return nil, fmt.Errorf("%s: usage %q: tag %s of %s exports tree SHA-256 %s, the lock recorded %s", req.requester, req.resource, sel.Tag, o.Source, sum, old.SHA256)
 	}
 	e := &lock.Entry{Resource: id, Kind: lock.KindVCS, Publisher: p.Publisher, Name: p.Name, Version: p.Version, VCS: o.VCS, Source: o.Source, Tag: sel.Tag, Revision: revision, SHA256: sum, MetaGenerated: !hasMeta}
+	dst := treePath(r.libDir, p)
+	if err := r.claim(dst, id, sum); err != nil {
+		return nil, err
+	}
 	if r.opts.LockOnly {
 		return e, r.enqueueUsages(e, p)
 	}
@@ -700,10 +812,6 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request) (*lock.Entry, error
 			return nil, err
 		}
 		r.logf("%s %s: tag %s has no %s; generated one for the installed copy", p.Name, p.Version, sel.Tag, project.MetaFile)
-	}
-	dst := treePath(r.libDir, p)
-	if err := r.claim(dst, id, sum); err != nil {
-		return nil, err
 	}
 	if r.alreadyStaged(dst) {
 		r.res.Reused = append(r.res.Reused, id)

@@ -35,7 +35,8 @@ what package managers install.
 - **Lock** — `.project.lock.json` beside `.project.json`: one entry per package of the
   transitive closure with `resource`, `kind`, `vcs`, `source`, `tag`, `revision`, `sha256` and
   the usages it declares; deterministic bytes, so a fresh clone reproduces it exactly. A lock
-  entry wins over a constraint.
+  entry wins over a constraint everywhere but in `update`, the one command that moves a lock
+  entry (`outdated` shows what it would move).
 - **Constraints** — `versionConstraint` in `.project.json`: exact (`1.2.0`), caret (`^1.2.0`),
   tilde (`~1.2.0`) and comparison ranges (`>=1.2.0 <2.0.0`). `@<version>` in the resource with no
   `versionConstraint` is an exact constraint.
@@ -55,6 +56,8 @@ are in [docs/packages.md](docs/packages.md).
 syspi init [-C dir] [-publisher P] [-name N] [-version V]   write .project.json and .meta.json
 syspi add <resource>[@<version>] [<constraint>]              add a usage, resolve, install, lock
 syspi remove <resource>...                                    drop a usage, re-lock, remove what nothing else needs from lib/
+syspi update [<resource>...]                                  move the named (or all) usages to the highest version allowed, install, re-lock
+syspi outdated [-json] [<resource>...]                        report what update would move; write nothing
 syspi install | sync                                          resolve .project.json + lock, install what is missing or changed
 syspi lock                                                    write .project.lock.json without installing
 syspi bundle [-o out.kpar] [-tag T] <dir>                     deterministic .kpar; checks tag == version in a tagged checkout
