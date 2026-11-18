@@ -227,6 +227,7 @@ func TestEndToEnd(t *testing.T) {
 	tools := filepath.Join(root, "tools")
 	write(t, tools, ".project.json", "{\n  \"name\": \"tools\",\n  \"publisher\": \"acme\",\n  \"version\": \"3.0.0\"\n}\n")
 	write(t, tools, "Tools.sysml", "package Tools {\n  part def Tool;\n}\n")
+	write(t, tools, ".meta.json", sysmlBundleMeta)
 	served := filepath.Join(root, "served")
 	os.MkdirAll(served, 0o755)
 	kpar := filepath.Join(served, "acme-tools_3.0.0.kpar")
@@ -234,7 +235,10 @@ func TestEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bundle: %v\n%s", err, out)
 	}
-	out2, _ := shErr(root, []string{"SOURCE_DATE_EPOCH=1700000000"}, bin, "bundle", "-o", kpar+".again", tools)
+	out2, err := shErr(root, []string{"SOURCE_DATE_EPOCH=1700000000"}, bin, "bundle", "-o", kpar+".again", tools)
+	if err != nil {
+		t.Fatalf("second bundle: %v\n%s", err, out2)
+	}
 	a, _ := os.ReadFile(kpar)
 	b, _ := os.ReadFile(kpar + ".again")
 	if !bytes.Equal(a, b) {
@@ -506,6 +510,34 @@ func TestSameTreeFromGitHgSvn(t *testing.T) {
 	}
 }
 
+const sysmlBundleMeta = `{"index":{},"created":"2000-01-01T00:00:00Z","metamodel":"https://www.omg.org/spec/SysML/20250201"}`
+
+// A command that rewrites .meta.json keeps the declared metamodel, so the project still bundles.
+func TestAddKeepsMetamodel(t *testing.T) {
+	bin := syspiBinary(t)
+	root := t.TempDir()
+	dep := filepath.Join(root, "dep")
+	write(t, dep, ".project.json", "{\n  \"name\": \"dep\",\n  \"version\": \"1.0.0\"\n}\n")
+	write(t, dep, "Dep.sysml", "package Dep;\n")
+	app := filepath.Join(root, "app")
+	write(t, app, ".project.json", "{\n  \"name\": \"app\",\n  \"version\": \"1.0.0\"\n}\n")
+	write(t, app, "App.sysml", "package App;\n")
+	write(t, app, ".meta.json", sysmlBundleMeta)
+
+	sh(t, app, bin, "add", "../dep")
+	meta, err := os.ReadFile(filepath.Join(app, ".meta.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(meta), `"metamodel": "https://www.omg.org/spec/SysML/20250201"`) {
+		t.Fatalf("add dropped the metamodel:\n%s", meta)
+	}
+	if !strings.Contains(string(meta), `"App": "App.sysml"`) {
+		t.Fatalf("add did not regenerate the index:\n%s", meta)
+	}
+	sh(t, app, bin, "bundle", "-o", filepath.Join(root, "app.kpar"), app)
+}
+
 func TestRefusals(t *testing.T) {
 	bin := syspiBinary(t)
 	root := t.TempDir()
@@ -516,6 +548,7 @@ func TestRefusals(t *testing.T) {
 	good := filepath.Join(root, "good")
 	write(t, good, ".project.json", "{\n  \"name\": \"g\",\n  \"version\": \"1.0.0\"\n}\n")
 	write(t, good, "G.sysml", "package G;\n")
+	write(t, good, ".meta.json", sysmlBundleMeta)
 	goodKpar := filepath.Join(root, "g.kpar")
 	sh(t, root, bin, "bundle", "-o", goodKpar, good)
 	traversal := filepath.Join(root, "traversal.kpar")
@@ -577,6 +610,7 @@ func TestHostedArchive(t *testing.T) {
 	tools := filepath.Join(root, "tools")
 	write(t, tools, ".project.json", "{\n  \"name\": \"tools\",\n  \"publisher\": \"acme\",\n  \"version\": \"3.0.0\"\n}\n")
 	write(t, tools, "Tools.sysml", "package Tools {\n  part def Tool;\n}\n")
+	write(t, tools, ".meta.json", sysmlBundleMeta)
 	served := filepath.Join(root, "served")
 	os.MkdirAll(served, 0o755)
 	kpar := filepath.Join(served, "release.kpar")

@@ -195,6 +195,7 @@ func TestAuthHTTPNetrc(t *testing.T) {
 	pkg := filepath.Join(root, "tools")
 	write(t, pkg, ".project.json", "{\n  \"name\": \"tools\",\n  \"publisher\": \"acme\",\n  \"version\": \"3.0.0\"\n}\n")
 	write(t, pkg, "Tools.sysml", "package Tools;\n")
+	write(t, pkg, ".meta.json", sysmlBundleMeta)
 	files := filepath.Join(root, "files")
 	os.MkdirAll(files, 0o755)
 	sh(t, root, bin, "bundle", "-o", filepath.Join(files, "tools.kpar"), pkg)

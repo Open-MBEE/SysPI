@@ -80,6 +80,35 @@ type Meta struct {
 // SHA256 is the algorithm name this tool writes (Table 13, Note 6).
 const SHA256 = "SHA256"
 
+const sysmlMetamodelPrefix = "https://www.omg.org/spec/SysML/"
+const sysml20Metamodel = sysmlMetamodelPrefix + "20250201"
+
+// sysmlMetamodel is the version-specific form of SysML 2.0 clause 2: the
+// prefix and OMG's eight-digit date stamp.
+var sysmlMetamodel = regexp.MustCompile(`^` + regexp.QuoteMeta(sysmlMetamodelPrefix) + `[0-9]{8}$`)
+
+// validateBundleMetamodel refuses a bundle with .sysml members, or one that
+// declares a SysML metamodel, unless the declaration is a versioned SysML URI.
+func validateBundleMetamodel(metamodel string, members []string) error {
+	isSysML := strings.HasPrefix(metamodel, sysmlMetamodelPrefix)
+	for _, member := range members {
+		if strings.EqualFold(filepath.Ext(member), ".sysml") {
+			isSysML = true
+			break
+		}
+	}
+	if isSysML && !sysmlMetamodel.MatchString(metamodel) {
+		return fmt.Errorf("%s: a SysML bundle requires \"metamodel\" to be the versioned SysML URI (%q for SysML 2.0), got %q", MetaFile, sysml20Metamodel, metamodel)
+	}
+	return nil
+}
+
+// KeepDeclared copies what an author declares and no file content implies:
+// metamodel, includesDerived and includesImplied.
+func (m *Meta) KeepDeclared(from *Meta) {
+	m.Metamodel, m.IncludesDerived, m.IncludesImplied = from.Metamodel, from.IncludesDerived, from.IncludesImplied
+}
+
 // ParseMeta decodes a .meta.json body.
 func ParseMeta(data []byte) (*Meta, error) {
 	var m Meta
