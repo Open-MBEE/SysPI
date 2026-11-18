@@ -673,9 +673,11 @@ func TestHostedArchive(t *testing.T) {
 	write(t, other, ".project.json", `{"name":"dev","version":"0.0.1","usage":[{"resource":"`+id+"&checksum=sha1:"+strings.Repeat("00", 20)+`"}]}`)
 	runErr(t, consumer(t, project.Usage{Resource: good}, project.Usage{Resource: other}), Options{}, "checksum mismatch: the resource declares sha1 "+strings.Repeat("00", 20)+", the archive has "+sha1sum)
 	// A lock-only run on a fresh clone cannot check a sha1 against the lock,
-	// so it downloads the archive to check it rather than trusting the lock.
+	// so it downloads the archive to check it rather than trusting the lock;
+	// offline, it refuses rather than lock an unchecked usage.
 	clone := consumer(t, project.Usage{Resource: id + "&checksum=sha1:" + strings.Repeat("00", 20)})
 	write(t, clone, project.LockFile, string(readFile(t, filepath.Join(dir, project.LockFile))))
+	runErr(t, clone, Options{LockOnly: true, Offline: true}, "offline: "+srv.URL+"/release.kpar is not installed and would have to be downloaded")
 	runErr(t, clone, Options{LockOnly: true}, "checksum mismatch: the resource declares sha1 "+strings.Repeat("00", 20)+", the archive has "+sha1sum)
 	rewrite(t, clone, project.Usage{Resource: id + "&checksum=sha1:" + sha1sum})
 	if res, _ := run(t, clone, Options{LockOnly: true}); res.Lock.Find(id) == nil || res.Lock.Find(id).SHA256 != sum {
