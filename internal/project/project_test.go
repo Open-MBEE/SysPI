@@ -101,16 +101,13 @@ func TestProjectAndMeta(t *testing.T) {
 	if un, err := VerifyChecksums(dir, m); err != nil || len(un) != 1 || un[0] != "README.md" {
 		t.Fatalf("NONE entry = %v %v", un, err)
 	}
-	// The object-shaped checksum some producers write and the spec's list shape both parse.
+	// Both the schema's object form and Table 13's list form parse.
 	var one, list Meta
 	if err := json.Unmarshal([]byte(`{"index":{},"created":"x","checksum":{"a":{"value":"v","algorithm":"SHA256"}}}`), &one); err != nil || len(one.Checksum["a"]) != 1 {
 		t.Fatalf("object shape: %v", err)
 	}
 	if err := json.Unmarshal([]byte(`{"index":{},"created":"x","checksum":{"a":[{"value":"v","algorithm":"SHA256"}]}}`), &list); err != nil || len(list.Checksum["a"]) != 1 {
 		t.Fatalf("list shape: %v", err)
-	}
-	if !strings.Contains(string(one.Marshal()), `"a": [`) {
-		t.Fatal("lists are not what is written")
 	}
 	t.Setenv("SOURCE_DATE_EPOCH", "1700000000")
 	if CreatedTime().Unix() != 1700000000 {
@@ -154,6 +151,21 @@ func TestBundleDeterministicAndOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
+	rawMeta, err := a.readMember(a.byName[MetaFile], maxMetaSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Checksum map[string]Checksum `json:"checksum"`
+	}
+	if err := json.Unmarshal(rawMeta, &wire); err != nil {
+		t.Fatalf("bundle checksums must be objects: %v", err)
+	}
+	for _, name := range append([]string{ProjectFile}, a.Members...) {
+		if sum := wire.Checksum[name]; sum.Algorithm != SHA256 || len(sum.Value) != 64 {
+			t.Errorf("bundle checksum for %s = %+v", name, sum)
+		}
+	}
 	if a.Project.Name != "widgets" || len(a.Members) != 3 || a.Members[0] != "README.md" {
 		t.Fatalf("archive = %+v", a)
 	}
@@ -176,6 +188,28 @@ func TestBundleDeterministicAndOpen(t *testing.T) {
 	}
 	if err := a.Extract(dst); err == nil {
 		t.Fatal("extract over existing accepted")
+	}
+}
+
+func TestOpenArchiveLegacyChecksums(t *testing.T) {
+	const expected = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+	const metadata = `{"index":{},"created":"2000-01-01T00:00:00Z","checksum":{"model.kerml":[{"value":"` + expected + `","algorithm":"SHA256"}]}}`
+	members := map[string]string{
+		ProjectFile:   `{"name":"legacy","version":"1.0.0"}`,
+		MetaFile:      metadata,
+		"model.kerml": "hello",
+	}
+	a, err := OpenArchive(rawZip(t, members))
+	if err != nil {
+		t.Fatalf("legacy array: %v", err)
+	}
+	a.Close()
+	if len(a.Unrecorded) != 1 || a.Unrecorded[0] != ProjectFile {
+		t.Fatalf("unrecorded members = %v", a.Unrecorded)
+	}
+	members["model.kerml"] = "changed"
+	if _, err := OpenArchive(rawZip(t, members)); err == nil || !strings.Contains(err.Error(), "checksum mismatch for model.kerml") {
+		t.Fatalf("tampered legacy archive error = %v", err)
 	}
 }
 
