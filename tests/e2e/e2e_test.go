@@ -512,6 +512,32 @@ func TestSameTreeFromGitHgSvn(t *testing.T) {
 
 const sysmlBundleMeta = `{"index":{},"created":"2000-01-01T00:00:00Z","metamodel":"https://www.omg.org/spec/SysML/20250201"}`
 
+// A command that rewrites .meta.json keeps the declared metamodel, so the project still bundles.
+func TestAddKeepsMetamodel(t *testing.T) {
+	bin := syspiBinary(t)
+	root := t.TempDir()
+	dep := filepath.Join(root, "dep")
+	write(t, dep, ".project.json", "{\n  \"name\": \"dep\",\n  \"version\": \"1.0.0\"\n}\n")
+	write(t, dep, "Dep.sysml", "package Dep;\n")
+	app := filepath.Join(root, "app")
+	write(t, app, ".project.json", "{\n  \"name\": \"app\",\n  \"version\": \"1.0.0\"\n}\n")
+	write(t, app, "App.sysml", "package App;\n")
+	write(t, app, ".meta.json", sysmlBundleMeta)
+
+	sh(t, app, bin, "add", "../dep")
+	meta, err := os.ReadFile(filepath.Join(app, ".meta.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(meta), `"metamodel": "https://www.omg.org/spec/SysML/20250201"`) {
+		t.Fatalf("add dropped the metamodel:\n%s", meta)
+	}
+	if !strings.Contains(string(meta), `"App": "App.sysml"`) {
+		t.Fatalf("add did not regenerate the index:\n%s", meta)
+	}
+	sh(t, app, bin, "bundle", "-o", filepath.Join(root, "app.kpar"), app)
+}
+
 func TestRefusals(t *testing.T) {
 	bin := syspiBinary(t)
 	root := t.TempDir()

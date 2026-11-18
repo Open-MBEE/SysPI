@@ -443,13 +443,16 @@ func report(w io.Writer, res *install.Result) {
 // refreshMeta regenerates .meta.json when the project has one, so its
 // checksum of .project.json stays true after a usage was added.
 func refreshMeta(dir string) error {
-	if _, ok, err := project.ReadMeta(dir); err != nil || !ok {
+	old, ok, err := project.ReadMeta(dir)
+	if err != nil || !ok {
 		return err
 	}
 	m, err := project.GenerateMeta(dir, project.CreatedTime())
 	if err != nil {
 		return err
 	}
+	// What the author declared is not derived from the files; carry it over.
+	m.Metamodel, m.IncludesDerived, m.IncludesImplied = old.Metamodel, old.IncludesDerived, old.IncludesImplied
 	return m.Write(dir)
 }
 
