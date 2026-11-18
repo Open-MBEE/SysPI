@@ -822,6 +822,9 @@ func (r *resolver) resolveVCS(o *origin.Origin, req request, old *lock.Entry, sr
 		if cached.warning != "" {
 			r.logf("%s", cached.warning)
 		}
+		if err := r.claim(treePath(r.libDir, cached.project), id, cached.entry.SHA256); err != nil {
+			return nil, err
+		}
 		return &cached.entry, r.enqueueUsages(&cached.entry, cached.project)
 	}
 	if src == nil {

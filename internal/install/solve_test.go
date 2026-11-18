@@ -305,6 +305,24 @@ func TestLockReusesVerifiedCandidate(t *testing.T) {
 	}
 }
 
+// A reused candidate claims its lib/ slot again: backtracking released the first claim.
+func TestReusedLockCandidateClaimsItsSlot(t *testing.T) {
+	r, req, candidate := candidateFixture(t)
+	source := &countingCandidateSource{}
+	if _, err := r.resolveVCS(req.origin, req, nil, source, candidate); err != nil {
+		t.Fatal(err)
+	}
+	clear(r.slots)
+	dst := treePath(r.libDir, &project.Project{Name: "base", Version: "1.0.0"})
+	r.slots[dst] = slot{"pkg:generic/other?vcs_url=git%2Bhttps:%2F%2Fexample.org%2Fother", "0000"}
+	if _, err := r.resolveVCS(req.origin, req, nil, source, candidate); err == nil || !strings.Contains(err.Error(), "both install as") {
+		t.Fatalf("reused candidate ignored the claimed slot: %v", err)
+	}
+	if source.exports != 1 {
+		t.Fatalf("exported candidate %d times", source.exports)
+	}
+}
+
 func BenchmarkRepeatedLockCandidate(b *testing.B) {
 	for _, cached := range []bool{false, true} {
 		name := "fresh"
