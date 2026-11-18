@@ -3,6 +3,9 @@
 package install
 
 import (
+	"archive/zip"
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,7 +101,7 @@ func TestVerify(t *testing.T) {
 			t.Errorf("missing %q", want)
 		}
 	}
-	if len(ds) != 15 {
+	if len(ds) != 16 {
 		t.Errorf("%d discrepancies:\n%s", len(ds), got)
 	}
 	// Extra.sysml has no recorded checksum, so only the tree hash tells of it.
@@ -153,9 +156,8 @@ func TestVerifyRelativeLocalDir(t *testing.T) {
 	}
 }
 
-// A lock entry of a kind this tool does not know is a discrepancy, not a
-// package silently passed over; and a usage's resource and constraint are
-// compared as two fields, not one string.
+// An unknown lock kind is a discrepancy, not a package passed over; a
+// usage's resource and constraint are compared as two fields, not one string.
 func TestVerifyUnknownKindAndUsageFields(t *testing.T) {
 	dir := consumer(t, project.Usage{Resource: "pkgs/dev"})
 	write(t, dir, "pkgs/dev/.project.json", `{"name":"dev","version":"0.0.1","usage":[{"resource":"pkgs/core 1.0.0"}]}`)
@@ -182,5 +184,78 @@ func TestVerifyUnknownKindAndUsageFields(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
+	}
+}
+
+// Every altered member of an archive is reported, and its manifest is still
+// compared with the lock.
+func TestVerifyReportsEveryArchiveMismatch(t *testing.T) {
+	pkg := t.TempDir()
+	write(t, pkg, ".project.json", `{"name":"tools","publisher":"acme","version":"3.1.0"}`)
+	write(t, pkg, "Tools.sysml", "package Tools;\n")
+	write(t, pkg, "More.sysml", "package More;\n")
+	kpar := filepath.Join(t.TempDir(), "acme-tools_3.1.0.kpar")
+	if _, err := project.Bundle(pkg, kpar, time.Unix(0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	dir := consumer(t, project.Usage{Resource: kpar})
+	run(t, dir, Options{})
+	installed := filepath.Join(dir, "lib", "acme-tools_3.1.0.kpar")
+	rewriteArchive(t, installed, map[string]string{
+		"Tools.sysml":   "package Tools { part def T; }\n",
+		"More.sysml":    "package More { part def M; }\n",
+		".project.json": `{"name":"tools","publisher":"acme","version":"3.1.0","usage":[{"resource":"https://www.omg.org/spec/SysML/20250201/Systems-Library.kpar"}]}`,
+	})
+	ds, _, err := Verify(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := problems(ds)
+	for _, want := range []string{
+		"lib/acme-tools_3.1.0.kpar: SHA-256 ",
+		"lib/acme-tools_3.1.0.kpar: checksum mismatch for .project.json",
+		"lib/acme-tools_3.1.0.kpar: checksum mismatch for More.sysml",
+		"lib/acme-tools_3.1.0.kpar: checksum mismatch for Tools.sysml",
+		"lib/acme-tools_3.1.0.kpar: declares usage https://www.omg.org/spec/SysML/20250201/Systems-Library.kpar, which the lock does not record",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if len(ds) != 5 {
+		t.Errorf("%d discrepancies:\n%s", len(ds), got)
+	}
+}
+
+// rewriteArchive rebuilds the archive with the given members replaced, the
+// rest (its .meta.json included) byte for byte.
+func rewriteArchive(t *testing.T, p string, replace map[string]string) {
+	t.Helper()
+	rc, err := zip.OpenReader(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for _, f := range rc.File {
+		out, err := w.CreateHeader(&zip.FileHeader{Name: f.Name, Method: f.Method, Modified: f.Modified})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if content, ok := replace[f.Name]; ok {
+			out.Write([]byte(content))
+			continue
+		}
+		r, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(out, r)
+		r.Close()
+	}
+	rc.Close()
+	w.Close()
+	if err := os.WriteFile(p, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

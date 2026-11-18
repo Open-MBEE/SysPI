@@ -56,54 +56,67 @@ func IsArchiveFile(p string) bool { return strings.EqualFold(filepath.Ext(p), Ar
 // exactly one top-level .project.json and .meta.json exist, and every
 // recorded checksum matches. Nothing is extracted here.
 func OpenArchive(p string) (*Archive, error) {
+	a, _, err := openArchive(p, false)
+	return a, err
+}
+
+// InspectArchive opens a .kpar as OpenArchive does but, instead of stopping
+// at the first checksum mismatch, returns every member whose recorded
+// checksum does not match or that is recorded but absent. Project and Meta
+// are readable; the members must not be used while mismatches is non-empty.
+func InspectArchive(p string) (a *Archive, mismatches []string, err error) {
+	return openArchive(p, true)
+}
+
+func openArchive(p string, collect bool) (*Archive, []string, error) {
 	st, err := os.Stat(p)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if st.Size() > MaxArchiveSize {
-		return nil, fmt.Errorf("%s: archive is %d bytes, above the %d byte limit", p, st.Size(), MaxArchiveSize)
+		return nil, nil, fmt.Errorf("%s: archive is %d bytes, above the %d byte limit", p, st.Size(), MaxArchiveSize)
 	}
 	rc, err := zip.OpenReader(p)
 	if err != nil {
-		return nil, fmt.Errorf("%s: not a readable ZIP archive: %v", p, err)
+		return nil, nil, fmt.Errorf("%s: not a readable ZIP archive: %v", p, err)
 	}
 	a := &Archive{Path: p, rc: rc, byName: map[string]*zip.File{}}
 	if len(rc.File) > MaxArchiveMembers {
 		rc.Close()
-		return nil, fmt.Errorf("%s: %d members, above the %d member limit", p, len(rc.File), MaxArchiveMembers)
+		return nil, nil, fmt.Errorf("%s: %d members, above the %d member limit", p, len(rc.File), MaxArchiveMembers)
 	}
 	var total int64
 	for _, f := range rc.File {
 		name, err := normalizeMemberPath(f.Name)
 		if err != nil {
 			rc.Close()
-			return nil, fmt.Errorf("%s: %v", p, err)
+			return nil, nil, fmt.Errorf("%s: %v", p, err)
 		}
 		if name == "" || strings.HasSuffix(f.Name, "/") {
 			continue // directory entry
 		}
 		if f.Mode()&fs.ModeSymlink != 0 {
 			rc.Close()
-			return nil, fmt.Errorf("%s: member %s is a symbolic link, which is not allowed", p, name)
+			return nil, nil, fmt.Errorf("%s: member %s is a symbolic link, which is not allowed", p, name)
 		}
 		if !f.Mode().IsRegular() {
 			rc.Close()
-			return nil, fmt.Errorf("%s: member %s is not a regular file", p, name)
+			return nil, nil, fmt.Errorf("%s: member %s is not a regular file", p, name)
 		}
 		if _, dup := a.byName[name]; dup {
 			rc.Close()
-			return nil, fmt.Errorf("%s: member %s appears twice", p, name)
+			return nil, nil, fmt.Errorf("%s: member %s appears twice", p, name)
 		}
 		total += int64(f.UncompressedSize64)
 		if total > MaxArchiveSize {
 			rc.Close()
-			return nil, fmt.Errorf("%s: members unpack to more than %d bytes", p, MaxArchiveSize)
+			return nil, nil, fmt.Errorf("%s: members unpack to more than %d bytes", p, MaxArchiveSize)
 		}
 		a.byName[name] = f
 	}
 	if _, err := a.readMetaFiles(); err != nil {
 		rc.Close()
-		return nil, err
+		return nil, nil, err
 	}
 	for name := range a.byName {
 		if name != ProjectFile && name != MetaFile {
@@ -111,15 +124,16 @@ func OpenArchive(p string) (*Archive, error) {
 		}
 	}
 	sort.Strings(a.Members)
-	if err := a.verify(); err != nil {
+	bad, err := a.verify(collect)
+	if err != nil {
 		rc.Close()
-		return nil, err
+		return nil, nil, err
 	}
 	if a.SHA256, err = fileSHA256(p); err != nil {
 		rc.Close()
-		return nil, err
+		return nil, nil, err
 	}
-	return a, nil
+	return a, bad, nil
 }
 
 func (a *Archive) readMetaFiles() (bool, error) {
@@ -149,7 +163,7 @@ func (a *Archive) readMetaFiles() (bool, error) {
 
 // verify checks every recorded checksum; members the metadata does not
 // cover are listed in Unrecorded (Table 13 allows "some or all").
-func (a *Archive) verify() error {
+func (a *Archive) verify(collect bool) ([]string, error) {
 	names := make([]string, 0, len(a.byName))
 	for name := range a.byName {
 		if name != MetaFile {
@@ -157,13 +171,14 @@ func (a *Archive) verify() error {
 		}
 	}
 	sort.Strings(names)
+	var bad []string
 	for _, name := range names {
 		f := a.byName[name]
 		// Every member is read: the ZIP CRC catches a damaged member even
 		// when the metadata records no checksum for it.
 		data, err := a.readMember(f, MaxArchiveSize)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		sums, ok := a.Meta.Checksum[name]
 		if !ok || !sums.Recorded() {
@@ -171,15 +186,21 @@ func (a *Archive) verify() error {
 			continue
 		}
 		if err := checkSums(name, data, sums); err != nil {
-			return fmt.Errorf("%s: %v", a.Path, err)
+			if !collect {
+				return nil, fmt.Errorf("%s: %v", a.Path, err)
+			}
+			bad = append(bad, err.Error())
 		}
 	}
-	for name := range a.Meta.Checksum {
+	for _, name := range sortedKeys(a.Meta.Checksum) {
 		if _, ok := a.byName[name]; !ok {
-			return fmt.Errorf("%s: %s records a checksum for %s, which is not in the archive", a.Path, MetaFile, name)
+			if !collect {
+				return nil, fmt.Errorf("%s: %s records a checksum for %s, which is not in the archive", a.Path, MetaFile, name)
+			}
+			bad = append(bad, MetaFile+" records a checksum for "+name+", which is not in the archive")
 		}
 	}
-	return nil
+	return bad, nil
 }
 
 func (a *Archive) readMember(f *zip.File, limit int64) ([]byte, error) {

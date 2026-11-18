@@ -176,11 +176,14 @@ func verifyArchive(root, file string, e *lock.Entry) []Discrepancy {
 	} else if d != e.SHA256 {
 		out = append(out, at("SHA-256 "+d+" differs from the locked "+e.SHA256))
 	}
-	a, err := project.OpenArchive(file)
+	a, bad, err := project.InspectArchive(file)
 	if err != nil {
 		return append(out, at(strings.TrimPrefix(err.Error(), file+": ")))
 	}
 	defer a.Close()
+	for _, b := range bad {
+		out = append(out, at(b))
+	}
 	return append(out, verifyProject(at, a.Project, e)...)
 }
 
