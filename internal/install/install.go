@@ -72,8 +72,11 @@ type Result struct {
 type Change struct {
 	Resource string `json:"resource"`
 	Name     string `json:"name,omitempty"`
-	// From and To are the versions before and after; one is empty for an
-	// entry only one of the locks has.
+	// State is "moved" (both locks have the entry, at different versions),
+	// "added" (only the new lock has it) or "dropped" (only the old one).
+	State string `json:"state"`
+	// From and To are the versions before and after, as the locks record
+	// them (a standard library has none).
 	From string `json:"from,omitempty"`
 	To   string `json:"to,omitempty"`
 }
@@ -647,19 +650,19 @@ func changes(old, fresh *lock.Lock) []Change {
 		e := &fresh.Packages[i]
 		k := repositoryKey(e.Resource)
 		seen[k] = true
-		c := Change{Resource: e.Resource, Name: e.Name, To: e.Version}
+		c := Change{Resource: e.Resource, Name: e.Name, State: "added", To: e.Version}
 		if o := old.Find(k); o != nil {
 			if o.Version == e.Version {
 				continue
 			}
-			c.From = o.Version
+			c.State, c.From = "moved", o.Version
 		}
 		out = append(out, c)
 	}
 	for i := range old.Packages {
 		e := &old.Packages[i]
 		if !seen[repositoryKey(e.Resource)] {
-			out = append(out, Change{Resource: e.Resource, Name: e.Name, From: e.Version})
+			out = append(out, Change{Resource: e.Resource, Name: e.Name, State: "dropped", From: e.Version})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Resource < out[j].Resource })

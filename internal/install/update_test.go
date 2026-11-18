@@ -135,8 +135,18 @@ func TestUpdateAndOutdated(t *testing.T) {
 	}
 	// A new usage shows as new, a dropped one as dropped, in resource order.
 	res, err = Outdated(context.Background(), Options{Root: dir}, nil)
-	if err != nil || describeAll(res.Changes) != "Systems-Library.kpar  (new)" {
+	if err != nil || describeAll(res.Changes) != "Systems-Library.kpar (new)" || res.Changes[0].State != "added" {
 		t.Fatalf("new usage: %v %q", err, describeAll(res.Changes))
+	}
+	// Locked, then dropped: a standard library has no version, so the state says which.
+	if _, err := Update(context.Background(), Options{Root: dir}, nil); err != nil {
+		t.Fatal(err)
+	}
+	p.Usage = p.Usage[:len(p.Usage)-1]
+	p.Write(dir)
+	res, err = Outdated(context.Background(), Options{Root: dir}, nil)
+	if err != nil || describeAll(res.Changes) != "Systems-Library.kpar (dropped)" || res.Changes[0].State != "dropped" {
+		t.Fatalf("dropped usage: %v %q", err, describeAll(res.Changes))
 	}
 }
 

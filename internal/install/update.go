@@ -5,6 +5,7 @@ package install
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Open-MBEE/SysPI/internal/origin"
 	"github.com/Open-MBEE/SysPI/internal/project"
@@ -77,11 +78,11 @@ func (c *Change) Describe() string {
 	if name == "" {
 		name = c.Resource
 	}
-	switch {
-	case c.From == "":
-		return fmt.Sprintf("%s %s (new)", name, c.To)
-	case c.To == "":
-		return fmt.Sprintf("%s %s (dropped)", name, c.From)
+	switch c.State {
+	case "added":
+		return strings.TrimSpace(fmt.Sprintf("%s %s", name, c.To)) + " (new)"
+	case "dropped":
+		return strings.TrimSpace(fmt.Sprintf("%s %s", name, c.From)) + " (dropped)"
 	}
 	return fmt.Sprintf("%s %s -> %s", name, c.From, c.To)
 }
