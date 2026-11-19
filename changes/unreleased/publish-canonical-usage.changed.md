@@ -1,1 +1,0 @@
-- `syspi publish` prints the canonical `pkg:generic/<name>@<version>?checksum=sha256:…&download_url=…` usage of the uploaded archive instead of a bare SHA-256.

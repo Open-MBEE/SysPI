@@ -1,1 +1,0 @@
-- Preserve the declared metamodel, `includesDerived` and `includesImplied` in KPAR bundles and require a versioned OMG SysML metamodel URI when bundling textual SysML models.

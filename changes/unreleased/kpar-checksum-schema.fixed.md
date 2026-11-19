@@ -1,1 +1,0 @@
-- Write one checksum object per KPAR member as required by the published KerML interchange schema and continue verifying legacy checksum arrays.
