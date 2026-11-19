@@ -12,95 +12,14 @@ import (
 	"github.com/Open-MBEE/SysPI/internal/project"
 )
 
-type ModelCheckInputs struct {
-	Project  []string
-	Direct   []string
-	All      []string
-	Packages []*ModelPackage
-}
-
-// ModelPackage holds staged sources and the direct edges from the verified lock.
-type ModelPackage struct {
-	Resource string
-	Files    []string
-	direct   []*ModelPackage
-}
-
-// Scope returns each reachable source once, keeping direct dependencies first.
-func (p *ModelPackage) Scope() ModelCheckInputs {
-	inputs := ModelCheckInputs{Project: p.Files}
-	inputs.All = append(inputs.All, p.Files...)
-	seen := map[*ModelPackage]bool{p: true}
-	sources := make(map[string]bool)
-	for _, file := range p.Files {
-		sources[file] = true
-	}
-	add := func(deps []*ModelPackage) {
-		for _, dep := range deps {
-			if seen[dep] {
-				continue
-			}
-			seen[dep] = true
-			inputs.Packages = append(inputs.Packages, dep)
-			for _, file := range dep.Files {
-				if !sources[file] {
-					sources[file] = true
-					inputs.All = append(inputs.All, file)
-				}
-			}
-		}
-	}
-	add(p.direct)
-	inputs.Direct = inputs.All[len(p.Files):]
-	for i := 0; i < len(inputs.Packages); i++ {
-		add(inputs.Packages[i].direct)
-	}
-	return inputs
-}
-
-// ModelInputs supplies the project's sources and its exact verified lock closure.
-func ModelInputs(root, scratch string) (ModelCheckInputs, error) {
-	var inputs ModelCheckInputs
-	root, err := filepath.Abs(root)
-	if err != nil {
-		return inputs, err
-	}
-	p, err := project.ReadProject(root)
-	if err != nil {
-		return inputs, err
-	}
-	files, err := copyTextModels(root, filepath.Join(scratch, "project"))
-	if err != nil {
-		return inputs, err
-	}
-	if len(files) == 0 {
-		return inputs, fmt.Errorf("%s: model check requires at least one .sysml or .kerml file", root)
-	}
-	model, err := modelGraph(root, scratch, p)
-	if err != nil {
-		return inputs, err
-	}
-	model.Files = files
-	return model.Scope(), nil
-}
-
-// DependencyModels exports only the verified dependencies in the project's lock closure.
+// DependencyModels exports verified textual sources from the project's lock closure.
 func DependencyModels(root, scratch string) ([]string, error) {
 	p, err := project.ReadProject(root)
 	if err != nil {
 		return nil, err
 	}
-	model, err := modelGraph(root, scratch, p)
-	if err != nil {
-		return nil, err
-	}
-	return model.Scope().All, nil
-}
-
-func modelGraph(root, scratch string, p *project.Project) (*ModelPackage, error) {
-	model := &ModelPackage{}
 	if len(p.Usage) == 0 {
-		return model, nil
+		return nil, nil
 	}
 	l, ok, err := lock.Read(root, project.LockFile)
 	if err != nil {
@@ -110,42 +29,37 @@ func modelGraph(root, scratch string, p *project.Project) (*ModelPackage, error)
 		return nil, fmt.Errorf("%s: no %s; run syspi install", root, project.LockFile)
 	}
 	if discrepancies := verifyLock(root, p, l); len(discrepancies) > 0 {
-		return nil, fmt.Errorf("model check requires a verified installation: %s", discrepancies[0])
+		return nil, fmt.Errorf("dependency source export requires a verified installation: %s", discrepancies[0])
 	}
-	type edge struct {
-		from     *ModelPackage
-		resource string
-	}
-	queue := make([]edge, 0, len(p.Usage))
+
+	queue := make([]string, 0, len(p.Usage))
 	for _, u := range p.Usage {
-		queue = append(queue, edge{model, u.Resource})
+		queue = append(queue, u.Resource)
 	}
-	packages := make(map[string]*ModelPackage)
-	staged := make(map[string][]string)
+	seen := make(map[string]bool)
+	staged := make(map[string]bool)
+	var sources []string
 	for i := 0; i < len(queue); i++ {
-		usage := queue[i]
-		o, err := origin.Parse(usage.resource)
+		o, err := origin.Parse(queue[i])
 		if err != nil {
 			return nil, err
 		}
 		e := lockedEntry(l, o)
 		if e == nil {
-			return nil, fmt.Errorf("%s: missing lock entry for %s", root, usage.resource)
+			return nil, fmt.Errorf("%s: missing lock entry for %s", root, queue[i])
 		}
-		if dep := packages[e.Resource]; dep != nil {
-			usage.from.direct = append(usage.from.direct, dep)
+		if seen[e.Resource] {
 			continue
 		}
-		dep := &ModelPackage{Resource: e.Resource}
-		packages[e.Resource] = dep
-		usage.from.direct = append(usage.from.direct, dep)
+		seen[e.Resource] = true
 		for _, u := range e.Usage {
-			queue = append(queue, edge{dep, u.Resource})
+			queue = append(queue, u.Resource)
 		}
-		dir := libPath(filepath.Join(root, project.LibDir), e)
+
 		if e.Kind == lock.KindStandard {
 			continue
 		}
+		dir := libPath(filepath.Join(root, project.LibDir), e)
 		if e.Kind == lock.KindLocal {
 			dir = e.Source
 			if !filepath.IsAbs(dir) {
@@ -153,24 +67,23 @@ func modelGraph(root, scratch string, p *project.Project) (*ModelPackage, error)
 			}
 		}
 		dir = filepath.Clean(dir)
-		if files, ok := staged[dir]; ok {
-			dep.Files = files
+		if staged[dir] {
 			continue
 		}
+		staged[dir] = true
 		destination := filepath.Join(scratch, fmt.Sprintf("dependency-%d", i))
-		var models []string
+		var files []string
 		if e.Kind == lock.KindArchive {
-			models, err = extractLockedText(dir, destination, e.SHA256)
+			files, err = extractLockedText(dir, destination, e.SHA256)
 		} else {
-			models, err = copyTextModels(dir, destination)
+			files, err = copyTextModels(dir, destination)
 		}
 		if err != nil {
 			return nil, err
 		}
-		dep.Files = models
-		staged[dir] = models
+		sources = append(sources, files...)
 	}
-	return model, nil
+	return sources, nil
 }
 
 func extractLockedText(file, dst, sha256 string) ([]string, error) {

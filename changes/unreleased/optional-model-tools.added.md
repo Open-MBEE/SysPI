@@ -1,4 +1,0 @@
-- Add optional index generation and opt-in model validation with OpenSysML or sysml-toolkit.
-- Check project references against declared direct dependencies with `check-model -direct`.
-- Support the released sysml-toolkit 0.13.0 CLI for textual indexing and strict project checks.
-- Check each textual package's own direct dependencies when validating a locked graph with sysml-toolkit.

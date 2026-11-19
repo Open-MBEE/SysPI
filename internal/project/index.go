@@ -11,26 +11,6 @@ import (
 	"slices"
 )
 
-// WriteArchiveIndex exports the index of a verified archive as a standalone JSON map.
-func WriteArchiveIndex(archive, destination string, models []string) (string, error) {
-	a, err := OpenArchive(archive)
-	if err != nil {
-		return "", err
-	}
-	defer a.Close()
-	if !slices.Equal(a.Members, models) {
-		return "", fmt.Errorf("index exporter bundled %v, expected %v", a.Members, models)
-	}
-	data, err := json.Marshal(a.Meta.Index)
-	if err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(destination, append(data, '\n'), 0o600); err != nil {
-		return "", err
-	}
-	return destination, nil
-}
-
 func readBundleIndex(file string, members []string) (map[string]string, error) {
 	f, err := os.Open(file)
 	if err != nil {

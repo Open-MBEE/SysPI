@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/Open-MBEE/SysPI/internal/install"
-	"github.com/Open-MBEE/SysPI/internal/modeltool"
 	"github.com/Open-MBEE/SysPI/internal/origin"
 	"github.com/Open-MBEE/SysPI/internal/project"
 	"github.com/Open-MBEE/SysPI/internal/vcs"
@@ -45,7 +44,6 @@ Commands:
   verify    check every installed copy under lib/ against the lock; exit 1 on a discrepancy
   list      print the locked packages and whether each installed copy is present
   bundle    build a deterministic .kpar from a project directory
-  check-model  run explicitly selected SysML model validators
   dependency-sources  print verified dependency model sources as JSON
   publish   verify and upload a .kpar to an HTTPS artifact registry
   version   print the version
@@ -97,8 +95,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdList(args[1:], stdout, stderr)
 	case "bundle":
 		err = cmdBundle(ctx, args[1:], stdout, stderr)
-	case "check-model":
-		err = cmdCheckModel(ctx, args[1:], stdout, stderr)
 	case "dependency-sources":
 		err = cmdDependencySources(args[1:], stdout, stderr)
 	case "publish":
@@ -466,21 +462,16 @@ func refreshMeta(dir string) error {
 }
 
 func cmdBundle(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	fs := newFlagSet("bundle", stderr, "[-o out.kpar] [-tag <tag>] [-index index.json | -index-opensysml sysml | -index-toolkit sysmlv2] <dir>")
+	fs := newFlagSet("bundle", stderr, "[-o out.kpar] [-tag <tag>] [-index index.json] <dir>")
 	out := fs.String("o", "", "output path (default <publisher>-<name>_<version>.kpar in the current directory)")
 	tag := fs.String("tag", "", "tag to check against .project.json's version (default: the checked-out git/hg tag of <dir>, when any)")
 	index := fs.String("index", "", "JSON map of model names and short names to archive paths")
-	indexTool := fs.String("index-opensysml", "", "OpenSysML executable to generate the textual model index")
-	indexToolkit := fs.String("index-toolkit", "", "sysml-toolkit executable to generate the textual model index")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
 		fs.Usage()
 		return errUsage
-	}
-	if (*index != "" && (*indexTool != "" || *indexToolkit != "")) || (*indexTool != "" && *indexToolkit != "") {
-		return fmt.Errorf("-index, -index-opensysml, and -index-toolkit are mutually exclusive")
 	}
 	dir := fs.Arg(0)
 	p, err := project.ReadProject(dir)
@@ -503,21 +494,6 @@ func cmdBundle(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if *out == "" {
 		*out = p.InstallName() + project.ArchiveExt
 	}
-	if *indexTool != "" || *indexToolkit != "" {
-		scratch, err := os.MkdirTemp("", "syspi-model-index-*")
-		if err != nil {
-			return err
-		}
-		defer os.RemoveAll(scratch)
-		if *indexTool != "" {
-			*index, err = modeltool.ExportIndex(ctx, *indexTool, dir, scratch, stderr)
-		} else {
-			*index, err = modeltool.ExportToolkitIndex(ctx, *indexToolkit, dir, scratch, stderr)
-		}
-		if err != nil {
-			return err
-		}
-	}
 	meta, err := project.BundleWithIndex(dir, *out, createdFor(ctx, dir), *index)
 	if err != nil {
 		return err
@@ -528,68 +504,6 @@ func cmdBundle(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	}
 	a.Close()
 	fmt.Fprintf(stdout, "wrote %s (%d members, sha256 %s, created %s)\n", *out, len(a.Members), a.SHA256, meta.Created)
-	return nil
-}
-
-func cmdCheckModel(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	fs := newFlagSet("check-model", stderr, "[-C dir] [-direct] [-opensysml sysml] [-toolkit sysmlv2 [-library dir] [<model>...]]")
-	dir := fs.String("C", ".", "project directory")
-	openSysML := fs.String("opensysml", "", "OpenSysML executable to validate the project and its installed libraries")
-	direct := fs.Bool("direct", false, "check direct dependencies (the entire locked graph with sysml-toolkit)")
-	toolkit := fs.String("toolkit", "", "sysml-toolkit executable to check the project or given files")
-	library := fs.String("library", "", "standard library directory for sysml-toolkit")
-	if err := parse(fs, args); err != nil {
-		return err
-	}
-	if *openSysML == "" && *toolkit == "" ||
-		(*toolkit == "" && (fs.NArg() != 0 || *library != "")) ||
-		(*direct && fs.NArg() != 0) {
-		fs.Usage()
-		return errUsage
-	}
-	if *openSysML != "" || fs.NArg() == 0 {
-		scratch, err := os.MkdirTemp("", "syspi-model-check-*")
-		if err != nil {
-			return err
-		}
-		defer os.RemoveAll(scratch)
-		inputs, err := install.ModelInputs(*dir, scratch)
-		if err != nil {
-			return err
-		}
-		if *openSysML != "" {
-			if err := modeltool.ValidateOpenSysML(ctx, *openSysML, inputs.All, stdout); err != nil {
-				return err
-			}
-			if *direct && len(inputs.All) > len(inputs.Project)+len(inputs.Direct) {
-				if err := modeltool.ValidateDirect(ctx, *openSysML, inputs.Project, inputs.Direct, stdout); err != nil {
-					return err
-				}
-			}
-		}
-		if *toolkit != "" && fs.NArg() == 0 {
-			transitive := inputs.All[len(inputs.Project)+len(inputs.Direct):]
-			if err := modeltool.ValidateToolkitProject(ctx, *toolkit, *library, inputs.Project, inputs.Direct, transitive, *direct, stdout); err != nil {
-				return err
-			}
-			if *direct {
-				for _, pkg := range inputs.Packages {
-					if len(pkg.Files) == 0 {
-						continue
-					}
-					scope := pkg.Scope()
-					transitive := scope.All[len(scope.Project)+len(scope.Direct):]
-					if err := modeltool.ValidateToolkitProject(ctx, *toolkit, *library, scope.Project, scope.Direct, transitive, true, stdout); err != nil {
-						return fmt.Errorf("checking declared dependencies of %s: %w", pkg.Resource, err)
-					}
-				}
-			}
-			return nil
-		}
-	}
-	if *toolkit != "" {
-		return modeltool.ValidateToolkit(ctx, *toolkit, *library, fs.Args(), stdout)
-	}
 	return nil
 }
 

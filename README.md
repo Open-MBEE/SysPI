@@ -76,9 +76,7 @@ syspi install | sync                                          resolve .project.j
 syspi lock                                                    write .project.lock.json without installing
 syspi verify                                                  check lib/ against the lock, offline; exit 1 on any discrepancy, write nothing
 syspi list [-json]                                            the locked packages, where each is in lib/ and whether it is present
-syspi bundle [-o out.kpar] [-tag T] [-index index.json | -index-opensysml sysml | -index-toolkit sysmlv2] <dir>
-syspi check-model -opensysml sysml [-C dir] [-direct]        validate a project with OpenSysML
-syspi check-model -toolkit sysmlv2 [-library dir] [-direct]  validate the project and the locked dependencies
+syspi bundle [-o out.kpar] [-tag T] [-index index.json] <dir>
 syspi publish <archive.kpar> <https-url.kpar>               verify and upload to a conditional PUT artifact host
 ```
 
@@ -98,100 +96,17 @@ $ sysml -validate Rover.sysml   # OpenSysML reads lib/ on its own; no flags
 `bundle` takes its `created` timestamp from `SOURCE_DATE_EPOCH`, else from the checked-out git or
 hg commit, so two builds of the same tree are byte-identical.
 
-## Optional model validation and index generation
+## Model indexes and dependency sources
 
-SysPI runs without OpenSysML or sysml-toolkit. Install either executable
-separately when you want model checks in your release workflow. Put the
-executable on `PATH`, or pass its path in place of `sysml` or `sysmlv2`.
-SysPI invokes a tool only when you pass its flag.
-
-### Use OpenSysML with a SysPI project
-
-1. Get the `sysml` CLI for your platform from the [OpenSysML
-   releases](https://github.com/Open-MBEE/OpenSysML/releases). Use a build
-   that supports `-validate` and `-bundle`. If it is outside `PATH`, pass
-   its full filename, including `.exe` if applicable.
-2. From the project directory containing `.project.json`, restore and verify
-   dependencies, then validate the project:
-
-   ```sh
-   syspi install
-   syspi verify
-   syspi check-model -opensysml sysml
-   ```
-
-   SysPI checks the lock and gives OpenSysML a temporary copy of the project's
-   textual models and the textual files from the exact locked dependencies.
-   Validation warnings cause the check to fail. Use `-C <dir>` to check a
-   project from another directory.
-
-   Add `-direct` to check that the current project's references also resolve
-   with only its own files and directly declared dependencies:
-
-   ```sh
-   syspi check-model -opensysml sysml -direct
-   ```
-
-   SysPI first checks the full graph. The second pass reports unresolved
-   references in the current project's files. It allows unresolved references
-   *inside* a direct dependency when those references were resolved in the full
-   graph. Run this check for each project you release. A model that relies on
-   an indirect dependency for name lookup may need to declare it directly.
-3. Declare the project's metamodel in `.meta.json`. For SysML 2.0 use
-   `"metamodel": "https://www.omg.org/spec/SysML/20250201"`. Then bundle:
-
-   ```sh
-   syspi bundle -index-opensysml sysml -o vehicle-1.0.0.kpar .
-   ```
-
-   SysPI asks OpenSysML to generate an index from a temporary copy of the
-   project's textual models. The parser finds top-level names and short names.
-   SysPI uses the generated index in the final KPAR. This mode rejects a project
-   that mixes `.sysml` and `.kerml` sources. If you already have an
-   exporter-generated index, use `-index index.json` instead. Choose one
-   index option per bundle.
-
-### Use sysml-toolkit instead of, or alongside, OpenSysML
-
-Download [sysml-toolkit 0.13.0](https://github.com/Open-MBEE/sysml-toolkit/releases/tag/v0.13.0)
-for your platform and verify the archive against the release's `SHA256SUMS`.
-Extract it and add the directory containing `sysmlv2` to `PATH`, or pass the
-executable path directly (`sysmlv2.exe` on Windows). Confirm the version with
-`sysmlv2 --version`. The toolkit is only needed when you select it.
-From the directory containing `.project.json`, run:
-
-```sh
-syspi install
-syspi verify
-syspi check-model -toolkit sysmlv2 -direct
-syspi bundle -index-toolkit sysmlv2 -o vehicle-1.0.0.kpar .
-```
-
-Set the SysML metamodel in `.meta.json` before bundling. With no filenames,
-SysPI supplies the verified project and dependency files to the toolkit.
-The toolkit generates the parser-based index with `kpar-index`; SysPI writes
-the archive using its own project metadata and checksum rules.
-SysPI can also install a standalone KPAR created by
-`sysmlv2 convert --to kpar -o model.kpar Model.sysml`.
-`-direct` checks the project and each installed package with textual
-sources against its own declared direct dependencies. If a package fails,
-SysPI reports its locked resource. Toolkit warnings fail validation. Use
-`-library <dir-or-bundle>` when the toolkit needs the standard library.
-To run both validators against the same
-lock, use `syspi check-model -opensysml sysml -toolkit sysmlv2 -direct`.
-
-For a standalone strict check, pass explicit filenames to
-`syspi check-model -toolkit sysmlv2 <file>...`. In that mode the toolkit
-checks the given files together. The index and direct dependency workflows
-cover textual models. JSON and XMI need a suitable exporter and validator.
+For a release that needs a complete KPAR model index, pass
+`syspi bundle -index index.json` a JSON object mapping each top-level name
+and short name to its archive-relative model file. SysPI checks the file
+paths. The built-in fallback only indexes textual package declarations.
 
 `syspi dependency-sources` exports verified textual dependencies as JSON for
 editors. It includes both `.sysml` and `.kerml` members, follows dependencies
 declared by metadata-only packages, and emits a shared installed copy once.
-
-To run the release integration test, set `SYSPI_TEST_TOOLKIT` to the absolute
-path to the 0.13.0 executable and run
-`go test ./tests/e2e -run '^TestToolkitRelease$'`.
+Consumers can analyze these sources with their chosen model tools.
 
 ## Install
 
