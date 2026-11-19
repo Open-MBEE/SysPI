@@ -316,15 +316,21 @@ checked-out git or hg revision, otherwise the current time; so a bundle of an un
 is byte-identical across runs. The output file is never a member of itself when written inside
 the project.
 
-### Model index from an exporter
+### Model index
+
+By default, bundling reads supported textual SysML and KerML root
+declarations to index their names and short names. It skips nested
+bodies and handles quoted names and comments. A name that maps to
+two model files, an unsupported or ambiguous declaration, or an
+unbalanced declaration stops the bundle and asks for `-index`.
 
 Use `syspi bundle -index index.json -o library.kpar .` to supply a JSON object
 whose keys are top-level model names and short names and whose values are
 archive-relative paths. For example, `{"Vehicle":"models/vehicles.sysml","v":"models/vehicles.sysml"}`.
 SysPI checks that every entry points to a model file in the bundle and omits the
-index input file from the archive. A model-aware exporter must establish that the
-names and short names are complete. Without `-index`, SysPI uses its textual
-package scanner.
+index input file from the archive. Use an explicit map for JSON and XMI models
+or textual declarations the built-in indexer cannot classify. Its provider
+is responsible for the completeness of supplied names and short names.
 
 ### Publish a KPAR
 

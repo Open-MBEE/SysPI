@@ -388,7 +388,7 @@ func BundleWithIndex(dir, out string, created time.Time, indexFile string) (*Met
 			return nil, err
 		}
 	}
-	meta, err := generateMeta(dir, created, members, index)
+	meta, err := generateMeta(dir, created, members, index, true)
 	if err != nil {
 		return nil, err
 	}

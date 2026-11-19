@@ -6,6 +6,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -240,13 +241,18 @@ func TestBundleMetamodel(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			writeFile(t, dir, ProjectFile, `{"name":"model","version":"1.0.0"}`)
-			writeFile(t, dir, tc.member, "model contents")
+			writeFile(t, dir, tc.member, "package Model;")
 			if tc.metamodel != "" {
 				meta := Meta{Index: map[string]string{}, Created: "2000-01-01T00:00:00Z", Metamodel: tc.metamodel}
 				writeFile(t, dir, MetaFile, string(meta.Marshal()))
 			}
 			out := filepath.Join(t.TempDir(), "model.kpar")
-			_, err := Bundle(dir, out, time.Unix(0, 0))
+			index := ""
+			if ext := filepath.Ext(tc.member); ext == ".json" || ext == ".xmi" {
+				index = filepath.Join(t.TempDir(), "index.json")
+				writeFile(t, filepath.Dir(index), filepath.Base(index), fmt.Sprintf(`{"Model":%q}`, tc.member))
+			}
+			_, err := BundleWithIndex(dir, out, time.Unix(0, 0), index)
 			if tc.wantError {
 				if err == nil || !strings.Contains(err.Error(), sysml) {
 					t.Fatalf("bundle error = %v, want expected SysML metamodel URI", err)
@@ -278,7 +284,9 @@ func TestBundleKeepsDeclaredFlags(t *testing.T) {
 	writeFile(t, dir, "model.json", "[]")
 	writeFile(t, dir, MetaFile, `{"index":{},"created":"2000-01-01T00:00:00Z","includesDerived":true,"includesImplied":false}`)
 	out := filepath.Join(t.TempDir(), "model.kpar")
-	if _, err := Bundle(dir, out, time.Unix(0, 0)); err != nil {
+	index := filepath.Join(filepath.Dir(out), "index.json")
+	writeFile(t, filepath.Dir(index), filepath.Base(index), "{}")
+	if _, err := BundleWithIndex(dir, out, time.Unix(0, 0), index); err != nil {
 		t.Fatal(err)
 	}
 	a, err := OpenArchive(out)

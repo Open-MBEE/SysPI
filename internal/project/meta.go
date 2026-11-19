@@ -226,17 +226,16 @@ func Members(dir string, skip ...string) ([]string, error) {
 }
 
 // GenerateMeta builds the metadata for a project directory: an index of the
-// top-level package declarations of every textual model file and a SHA-256
-// checksum of every member except .meta.json itself.
+// recognized top-level textual names and a SHA-256 checksum of each member.
 func GenerateMeta(dir string, created time.Time, skip ...string) (*Meta, error) {
 	members, err := Members(dir, skip...)
 	if err != nil {
 		return nil, err
 	}
-	return generateMeta(dir, created, members, nil)
+	return generateMeta(dir, created, members, nil, false)
 }
 
-func generateMeta(dir string, created time.Time, members []string, index map[string]string) (*Meta, error) {
+func generateMeta(dir string, created time.Time, members []string, index map[string]string, strictIndex bool) (*Meta, error) {
 	m := &Meta{Index: index, Created: created.UTC().Format(time.RFC3339), Checksum: map[string]Checksums{}}
 	if m.Index == nil {
 		m.Index = map[string]string{}
@@ -249,10 +248,28 @@ func generateMeta(dir string, created time.Time, members []string, index map[str
 		sum := sha256.Sum256(data)
 		m.Checksum[rel] = Checksums{{Value: hex.EncodeToString(sum[:]), Algorithm: SHA256}}
 		if index == nil && IsModelFile(rel) {
-			for _, name := range topLevelPackages(rel, data) {
-				if prev, dup := m.Index[name]; !dup || rel < prev {
-					m.Index[name] = rel
+			ext := strings.ToLower(filepath.Ext(rel))
+			if ext != ".sysml" && ext != ".kerml" {
+				if strictIndex {
+					return nil, fmt.Errorf("%s: automatic indexing requires a textual model; supply -index", rel)
 				}
+				continue
+			}
+			names, err := textualIndexNames(data)
+			if err != nil {
+				if strictIndex {
+					return nil, fmt.Errorf("%s: %w; supply -index", rel, err)
+				}
+				names = topLevelPackages(rel, data)
+			}
+			for _, name := range names {
+				if prev, exists := m.Index[name]; exists {
+					if strictIndex && rel != prev {
+						return nil, fmt.Errorf("model index name %q is declared in %s and %s; supply -index", name, prev, rel)
+					}
+					continue
+				}
+				m.Index[name] = rel
 			}
 		}
 	}
