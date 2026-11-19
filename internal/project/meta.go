@@ -214,8 +214,8 @@ func Members(dir string, skip ...string) ([]string, error) {
 }
 
 // GenerateMeta builds the metadata for a project directory: an index of the
-// top-level package declarations of every textual model file and a SHA-256
-// checksum of every member except .meta.json itself.
+// names and short names every textual model file declares at its root and a
+// SHA-256 checksum of every member except .meta.json itself.
 func GenerateMeta(dir string, created time.Time, skip ...string) (*Meta, error) {
 	members, err := Members(dir, skip...)
 	if err != nil {
@@ -237,7 +237,7 @@ func generateMeta(dir string, created time.Time, members []string, index map[str
 		sum := sha256.Sum256(data)
 		m.Checksum[rel] = Checksums{{Value: hex.EncodeToString(sum[:]), Algorithm: SHA256}}
 		if index == nil && IsModelFile(rel) {
-			for _, name := range topLevelPackages(rel, data) {
+			for _, name := range topLevelNames(rel, data) {
 				if prev, dup := m.Index[name]; !dup || rel < prev {
 					m.Index[name] = rel
 				}
@@ -245,36 +245,6 @@ func generateMeta(dir string, created time.Time, members []string, index map[str
 		}
 	}
 	return m, nil
-}
-
-var packageDecl = regexp.MustCompile(`(?m)^\s*(?:(?:standard|library|private|public|abstract)\s+)*package\s+(?:'([^']+)'|([\p{L}_][\p{L}\p{N}_]*))`)
-
-// topLevelPackages scans a textual model file for package declarations at
-// brace depth zero. JSON and XMI files are not indexed.
-func topLevelPackages(rel string, data []byte) []string {
-	ext := strings.ToLower(filepath.Ext(rel))
-	if ext != ".sysml" && ext != ".kerml" {
-		return nil
-	}
-	var names []string
-	depth := 0
-	src := string(data)
-	for _, line := range strings.Split(src, "\n") {
-		if depth == 0 {
-			if m := packageDecl.FindStringSubmatch(line); m != nil {
-				if m[1] != "" {
-					names = append(names, m[1])
-				} else {
-					names = append(names, m[2])
-				}
-			}
-		}
-		depth += strings.Count(line, "{") - strings.Count(line, "}")
-		if depth < 0 {
-			depth = 0
-		}
-	}
-	return names
 }
 
 // VerifyChecksums checks every checksum .meta.json records against the files

@@ -43,7 +43,7 @@ func TestTopLevelNames(t *testing.T) {
 		{"not a textual file", "a.json", "package A;", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := topLevelPackages(tc.file, []byte(tc.src)); !reflect.DeepEqual(got, tc.want) {
+			if got := topLevelNames(tc.file, []byte(tc.src)); !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("%s\n got  %q\n want %q", tc.src, got, tc.want)
 			}
 		})
