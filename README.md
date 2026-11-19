@@ -185,6 +185,10 @@ For a standalone strict check, pass explicit filenames to
 checks the given files together. The index and direct dependency workflows
 cover textual models. JSON and XMI need a suitable exporter and validator.
 
+`syspi dependency-sources` exports verified textual dependencies as JSON for
+editors. It includes both `.sysml` and `.kerml` members, follows dependencies
+declared by metadata-only packages, and emits a shared installed copy once.
+
 To run the release integration test, set `SYSPI_TEST_TOOLKIT` to the absolute
 path to the 0.13.0 executable and run
 `go test ./tests/e2e -run '^TestToolkitRelease$'`.

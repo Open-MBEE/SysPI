@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/Open-MBEE/SysPI/internal/project"
 )
@@ -19,12 +20,15 @@ func ExportIndex(ctx context.Context, executable, dir, scratch string, output io
 	if err != nil {
 		return "", err
 	}
-	models, err := project.TextModelMembers(members)
-	if err != nil {
-		return "", err
-	}
+	models := project.TextModelMembers(members)
 	if len(models) == 0 {
 		return "", fmt.Errorf("OpenSysML index export requires .sysml or .kerml files")
+	}
+	language := filepath.Ext(models[0])
+	for _, model := range models[1:] {
+		if !strings.EqualFold(filepath.Ext(model), language) {
+			return "", fmt.Errorf("OpenSysML index export cannot mix .sysml and .kerml files")
+		}
 	}
 	input := filepath.Join(scratch, "model")
 	for _, name := range append(models, project.ProjectFile) {
@@ -57,10 +61,7 @@ func ExportToolkitIndex(ctx context.Context, executable, dir, scratch string, ou
 	if err != nil {
 		return "", err
 	}
-	models, err := project.TextModelMembers(members)
-	if err != nil {
-		return "", err
-	}
+	models := project.TextModelMembers(members)
 	if len(models) == 0 {
 		return "", fmt.Errorf("sysml-toolkit index export requires .sysml or .kerml files")
 	}

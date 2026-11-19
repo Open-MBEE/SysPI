@@ -31,6 +31,10 @@ func (p *ModelPackage) Scope() ModelCheckInputs {
 	inputs := ModelCheckInputs{Project: p.Files}
 	inputs.All = append(inputs.All, p.Files...)
 	seen := map[*ModelPackage]bool{p: true}
+	sources := make(map[string]bool)
+	for _, file := range p.Files {
+		sources[file] = true
+	}
 	add := func(deps []*ModelPackage) {
 		for _, dep := range deps {
 			if seen[dep] {
@@ -38,7 +42,12 @@ func (p *ModelPackage) Scope() ModelCheckInputs {
 			}
 			seen[dep] = true
 			inputs.Packages = append(inputs.Packages, dep)
-			inputs.All = append(inputs.All, dep.Files...)
+			for _, file := range dep.Files {
+				if !sources[file] {
+					sources[file] = true
+					inputs.All = append(inputs.All, file)
+				}
+			}
 		}
 	}
 	add(p.direct)
@@ -112,6 +121,7 @@ func modelGraph(root, scratch string, p *project.Project) (*ModelPackage, error)
 		queue = append(queue, edge{model, u.Resource})
 	}
 	packages := make(map[string]*ModelPackage)
+	staged := make(map[string][]string)
 	for i := 0; i < len(queue); i++ {
 		usage := queue[i]
 		o, err := origin.Parse(usage.resource)
@@ -133,7 +143,6 @@ func modelGraph(root, scratch string, p *project.Project) (*ModelPackage, error)
 			queue = append(queue, edge{dep, u.Resource})
 		}
 		dir := libPath(filepath.Join(root, project.LibDir), e)
-		destination := filepath.Join(scratch, fmt.Sprintf("dependency-%d", i))
 		if e.Kind == lock.KindStandard {
 			continue
 		}
@@ -143,6 +152,12 @@ func modelGraph(root, scratch string, p *project.Project) (*ModelPackage, error)
 				dir = filepath.Join(root, filepath.FromSlash(dir))
 			}
 		}
+		dir = filepath.Clean(dir)
+		if files, ok := staged[dir]; ok {
+			dep.Files = files
+			continue
+		}
+		destination := filepath.Join(scratch, fmt.Sprintf("dependency-%d", i))
 		var models []string
 		if e.Kind == lock.KindArchive {
 			models, err = extractLockedText(dir, destination, e.SHA256)
@@ -153,6 +168,7 @@ func modelGraph(root, scratch string, p *project.Project) (*ModelPackage, error)
 			return nil, err
 		}
 		dep.Files = models
+		staged[dir] = models
 	}
 	return model, nil
 }
@@ -174,10 +190,7 @@ func copyTextModels(src, dst string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	files, err := project.TextModelMembers(members)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", src, err)
-	}
+	files := project.TextModelMembers(members)
 	for i, member := range files {
 		name := filepath.FromSlash(member)
 		data, err := os.ReadFile(filepath.Join(src, name))

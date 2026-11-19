@@ -252,12 +252,9 @@ func (a *Archive) extractMember(dst, name string) error {
 
 // ExtractTextModels copies verified textual model members into a fresh directory.
 func (a *Archive) ExtractTextModels(dst string) ([]string, error) {
-	names, err := TextModelMembers(a.Members)
-	if err != nil {
-		return nil, err
-	}
+	names := TextModelMembers(a.Members)
 	if len(names) == 0 {
-		return nil, fmt.Errorf("%s: archive contains no textual model files", a.Path)
+		return nil, nil
 	}
 	if err := os.Mkdir(dst, 0o700); err != nil {
 		return nil, err

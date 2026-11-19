@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -264,6 +265,57 @@ func TestExampleKPARs(t *testing.T) {
 	}
 }
 
+func TestDependencySourceExport(t *testing.T) {
+	bin := syspiBinary(t)
+	root, local, served := t.TempDir(), t.TempDir(), t.TempDir()
+	server := httptest.NewServer(http.FileServer(http.Dir(served)))
+	defer server.Close()
+	write(t, local, project.ProjectFile, `{"name":"local","version":"1.0.0"}`)
+	write(t, local, "Local.sysml", "package Local;\n")
+	write(t, local, "nested/Extra.kerml", "package Extra;\n")
+
+	library := t.TempDir()
+	write(t, library, project.ProjectFile, `{"name":"tools","version":"1.0.0"}`)
+	write(t, library, project.MetaFile, sysmlBundleMeta)
+	write(t, library, "Tools.sysml", "package Tools;\n")
+	write(t, library, "nested/Support.kerml", "package Support;\n")
+	sh(t, library, bin, "bundle", "-o", filepath.Join(served, "tools.kpar"), ".")
+	data, err := os.ReadFile(filepath.Join(served, "tools.kpar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, served, "mirror.kpar", string(data))
+
+	wrapper := t.TempDir()
+	write(t, wrapper, project.ProjectFile, fmt.Sprintf(`{"name":"suite","version":"1.0.0","usage":[{"resource":%q}]}`, server.URL+"/tools.kpar"))
+	sh(t, wrapper, bin, "bundle", "-o", filepath.Join(served, "suite.kpar"), ".")
+	sh(t, root, bin, "init", "-name", "demo")
+	sh(t, root, bin, "add", server.URL+"/suite.kpar")
+	sh(t, root, bin, "add", server.URL+"/mirror.kpar")
+	sh(t, root, bin, "add", local)
+	sh(t, root, bin, "verify")
+
+	output := sh(t, root, bin, "dependency-sources")
+	var sources []struct{ Path, Text string }
+	if err := json.Unmarshal([]byte(output), &sources); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"Local.sysml": "package Local;\n", "Extra.kerml": "package Extra;\n",
+		"Tools.sysml": "package Tools;\n", "Support.kerml": "package Support;\n",
+	}
+	for _, source := range sources {
+		name := filepath.Base(source.Path)
+		if text, ok := want[name]; !ok || source.Text != text {
+			t.Fatalf("unexpected or duplicate source: %+v", source)
+		}
+		delete(want, name)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing sources: %v", want)
+	}
+}
+
 func TestToolkitRelease(t *testing.T) {
 	tool := os.Getenv("SYSPI_TEST_TOOLKIT")
 	if tool == "" {
@@ -343,4 +395,24 @@ func TestToolkitRelease(t *testing.T) {
 	sh(t, graphRoot, bin, "remove", wrapper)
 	sh(t, graphRoot, bin, "add", qualified)
 	sh(t, graphRoot, bin, "check-model", "-toolkit", tool, "-direct")
+
+	suiteDir := t.TempDir()
+	write(t, suiteDir, project.ProjectFile, fmt.Sprintf(`{"name":"suite","version":"1.0.0","usage":[{"resource":%q}]}`, power))
+	sh(t, suiteDir, bin, "bundle", "-o", filepath.Join(served, "suite.kpar"), ".")
+	powerArchive, err := os.ReadFile(filepath.Join(served, "power.kpar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, served, "power-mirror.kpar", string(powerArchive))
+	suiteRoot := t.TempDir()
+	sh(t, suiteRoot, bin, "init", "-name", "suite-demo")
+	write(t, suiteRoot, "Demo.sysml", "package Demo { part battery : Power::Battery; }\n")
+	sh(t, suiteRoot, bin, "add", server.URL+"/suite.kpar")
+	sh(t, suiteRoot, bin, "check-model", "-toolkit", tool)
+	if output, err := shErr(suiteRoot, nil, bin, "check-model", "-toolkit", tool, "-direct"); err == nil ||
+		!strings.Contains(output, "Power::Battery") || !strings.Contains(output, "transitive") {
+		t.Fatalf("expected a transitive-only reference through the metadata-only suite: %v\n%s", err, output)
+	}
+	sh(t, suiteRoot, bin, "add", server.URL+"/power-mirror.kpar")
+	sh(t, suiteRoot, bin, "check-model", "-toolkit", tool, "-direct")
 }

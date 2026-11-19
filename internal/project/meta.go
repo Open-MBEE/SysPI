@@ -176,22 +176,16 @@ func IsModelFile(rel string) bool {
 	return modelExts[strings.ToLower(filepath.Ext(base))]
 }
 
-// TextModelMembers selects textual members and checks that they use one language.
-func TextModelMembers(members []string) ([]string, error) {
+// TextModelMembers selects textual SysML and KerML members in their input order.
+func TextModelMembers(members []string) []string {
 	var names []string
-	language := ""
 	for _, member := range members {
 		ext := strings.ToLower(filepath.Ext(member))
-		if ext != ".sysml" && ext != ".kerml" {
-			continue
+		if ext == ".sysml" || ext == ".kerml" {
+			names = append(names, member)
 		}
-		if language != "" && language != ext {
-			return nil, fmt.Errorf("a textual project cannot mix .sysml and .kerml files")
-		}
-		language = ext
-		names = append(names, member)
 	}
-	return names, nil
+	return names
 }
 
 // Members lists the files of a project directory relative to it with "/"

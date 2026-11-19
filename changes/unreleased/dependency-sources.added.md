@@ -1,2 +1,2 @@
-- Add a `dependency-sources` command for editors to read verified textual models from the locked dependency graph.
+- Add a `dependency-sources` command for editors to read verified SysML and KerML sources from the locked graph, including dependencies of metadata-only packages and one copy per installed source.
 - Publish a checksummed `syspi-wasip1-wasm.wasm` release asset for offline verification and model source export in WASI hosts.
