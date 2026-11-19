@@ -62,6 +62,8 @@ var kermlNotation = notation{
 	leading: words(),
 }
 
+// SysML 2.1 also reserves "new"; it only occurs in expressions, so leaving it
+// out keeps a 2.0 element of that name indexed.
 var sysmlNotation = notation{
 	reserved: words(`about abstract accept action actor after alias all allocate allocation analysis
 		and as assert assign assume at attribute bind binding by calc case comment
@@ -69,7 +71,7 @@ var sysmlNotation = notation{
 		defined dependency derived do doc else end entry enum event exhibit exit expose
 		false filter first flow for fork frame from hastype if implies import in include
 		individual inout interface istype item join language library locale loop merge
-		message meta metadata new nonunique not null objective occurrence of or ordered
+		message meta metadata nonunique not null objective occurrence of or ordered
 		out package parallel part perform port private protected public redefines ref
 		references render rendering rep require requirement return satisfy send snapshot
 		specializes stakeholder standard state subject subsets succession terminate then

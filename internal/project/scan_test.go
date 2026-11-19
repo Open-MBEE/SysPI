@@ -33,6 +33,7 @@ func TestTopLevelNames(t *testing.T) {
 		{"declarations in comments and strings", "a.sysml", "// package Note;\n//* package Long;\n */\n/* package Body; */\ndoc /* package Doc; */\nattribute s = \"; package Str;\";\npackage Real;", []string{"s", "Real"}},
 		{"unterminated comment", "a.sysml", "package A;\n/* package B;", []string{"A"}},
 		{"a name is not a keyword of the other language", "a.sysml", "part def class;\nattribute feature;", []string{"class", "feature"}},
+		{"a keyword only SysML 2.1 reserves", "a.sysml", "part def new;", []string{"new"}},
 		{"keyword use is not a name", "a.kerml", "class part;\nfeature def;", []string{"part", "def"}},
 		{"imports, aliases and filters", "a.sysml", "private import Base::*;\npublic import all Other::Thing;\nalias <s> Short for Base::Long;\nfilter @Safety;", nil},
 		{"anonymous elements", "a.sysml", "package;\npart : Wheel;\nattribute :>> mass = 1;\ndoc /* text */\ncomment about A /* text */\npart redefines wheel;", nil},
