@@ -12,7 +12,6 @@ package version
 import (
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -65,11 +64,6 @@ func (v Version) Less(o Version) bool { return v.v.LessThan(o.v) }
 
 // Compare returns -1, 0 or 1.
 func (v Version) Compare(o Version) int { return v.v.Compare(o.v) }
-
-// Sort orders versions ascending by precedence.
-func Sort(vs []Version) {
-	sort.Slice(vs, func(i, j int) bool { return vs[i].Less(vs[j]) })
-}
 
 // Constraint is a parsed version constraint.
 type Constraint struct {
