@@ -1,1 +1,0 @@
-- Generate KPAR indexes for supported top-level textual SysML and KerML declarations, including short names. Require a supplied index for unsupported or ambiguous declarations and non-text models.
