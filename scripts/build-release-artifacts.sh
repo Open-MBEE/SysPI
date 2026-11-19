@@ -4,7 +4,7 @@
 #   scripts/build-release-artifacts.sh <tag> [<dist directory>]
 #
 # Writes <dist>/syspi-<os>-<arch>.tar.gz (.zip for Windows), each holding syspi[.exe] and
-# LICENSE, and <dist>/SHA256SUMS.txt over them. Builds are static (CGO_ENABLED=0, -trimpath)
+# LICENSE, plus syspi-wasip1-wasm.wasm and SHA256SUMS.txt. Builds are static (CGO_ENABLED=0, -trimpath)
 # and stamped with the tag; the archives are reproducible for a given SOURCE_DATE_EPOCH
 # (default: the commit date of HEAD). The release workflow runs this on the tag; a release
 # rehearsal runs it locally with any tag name.
@@ -59,6 +59,7 @@ for platform in $platforms; do
 	echo "built syspi-$platform"
 done
 
+GOOS=wasip1 GOARCH=wasm go build -trimpath -ldflags "-s -w -X main.Version=$tag" -o "$dist/syspi-wasip1-wasm.wasm" ./cmd/syspi
 (cd "$dist" && $sum_cmd syspi-* | LC_ALL=C sort -k2 >SHA256SUMS.txt)
 [[ $(grep -Ec '^[0-9a-f]{64}  syspi-[a-z0-9]+-[a-z0-9]+\.(tar\.gz|zip)$' "$dist/SHA256SUMS.txt") -eq 6 ]] ||
 	{ echo "build-release-artifacts: SHA256SUMS.txt is not six '<sha256>  <archive>' lines" >&2; cat "$dist/SHA256SUMS.txt" >&2; exit 1; }

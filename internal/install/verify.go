@@ -54,6 +54,10 @@ func Verify(root string) ([]Discrepancy, int, error) {
 	if !ok {
 		return nil, 0, fmt.Errorf("%s: no %s; run syspi lock or syspi install first", root, project.LockFile)
 	}
+	return verifyLock(root, proj, l), len(l.Packages), nil
+}
+
+func verifyLock(root string, proj *project.Project, l *lock.Lock) []Discrepancy {
 	sort.Slice(l.Packages, func(i, j int) bool { return l.Packages[i].Resource < l.Packages[j].Resource })
 	var out []Discrepancy
 	for _, u := range proj.Usage {
@@ -77,7 +81,7 @@ func Verify(root string) ([]Discrepancy, int, error) {
 			out = append(out, Discrepancy{Resource: e.Resource, Problem: fmt.Sprintf("lock entry has the unknown kind %q; nothing of it can be checked", e.Kind)})
 		}
 	}
-	return out, len(l.Packages), nil
+	return out
 }
 
 // verifyUsage checks that a declared usage — of the project, or of a locked

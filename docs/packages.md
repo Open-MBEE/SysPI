@@ -232,15 +232,30 @@ writes, not translated.
 
 `update` is the one command that moves a lock entry the graph can keep.
 `syspi update [<resource>…]` re-resolves the named usages of `.project.json` — every repository of the closure when none is named — to the
-highest tagged version that satisfies their constraints, ignoring the lock; whatever moved is
+highest tagged version that satisfies their constraints, ignoring the lock for those usages; whatever moved is
 installed, the lock rewritten, and the copies the moved entries left under `lib/` removed as
 `remove` removes them. A usage `update` names takes that highest version or the run reports the
-conflict; it never settles for a lower one, and an entry it does not name keeps its lock entry.
-Every other command (`add`, `install`, `sync`, `lock`, `remove`) keeps a
-lock entry that satisfies its constraint. `syspi outdated [-json] [<resource>…]` resolves the same
+conflict; it never settles for a lower one. A targeted update keeps other compatible lock
+entries pinned. Ordinary online resolution (`add`, `install`, `sync`, `lock`, `remove`)
+prefers the lock and can reconsider a pin when a later requirement conflicts.
+`syspi outdated [-json] [<resource>…]` resolves the same
 way and reports each entry that would move (`name old -> new`, plus entries the move would add or
 drop), writing nothing. Archives, local directories and standard libraries have no versions to
 choose from: their usage names what they are, and `update` leaves them.
+
+### Resolver benchmarks
+
+Run the local benchmark with a Git executable on `PATH`:
+
+```sh
+go test -run '^$' -bench '^BenchmarkDependencyGraph$' -benchtime=3x ./internal/install
+```
+
+The benchmark runs both `lock` and `install` against 34 and 130 dependencies.
+Each graph mixes shared local dependencies with two tagged Git repositories.
+It measures cases that backtrack to a valid lock and cases that report a
+conflict. Use graphs with more versioned repositories to measure search cost
+when many dependencies offer alternate versions.
 
 ## Install layout
 

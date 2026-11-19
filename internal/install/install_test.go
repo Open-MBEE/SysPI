@@ -28,7 +28,7 @@ var gitEnv = []string{
 	"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
 }
 
-func git(t *testing.T, dir string, args ...string) {
+func git(t testing.TB, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -38,7 +38,7 @@ func git(t *testing.T, dir string, args ...string) {
 	}
 }
 
-func write(t *testing.T, root, rel, content string) {
+func write(t testing.TB, root, rel, content string) {
 	t.Helper()
 	p := filepath.Join(root, filepath.FromSlash(rel))
 	os.MkdirAll(filepath.Dir(p), 0o755)
@@ -50,7 +50,7 @@ func write(t *testing.T, root, rel, content string) {
 // fixture builds a bare repository "widgets" with v1.0.0 and v1.1.0 (the
 // latter with .meta.json and a usage of base), a sub-package "gears" under
 // packages/gears at both tags, and a bare "base" repository at v2.0.0.
-func fixture(t *testing.T) (widgets, base string) {
+func fixture(t testing.TB) (widgets, base string) {
 	root := t.TempDir()
 	w := filepath.Join(root, "w")
 	os.Mkdir(w, 0o755)

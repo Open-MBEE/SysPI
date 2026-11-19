@@ -1,0 +1,2 @@
+- Add a `dependency-sources` command for editors to read verified textual models from the locked dependency graph.
+- Publish a checksummed `syspi-wasip1-wasm.wasm` release asset for offline verification and model source export in WASI hosts.

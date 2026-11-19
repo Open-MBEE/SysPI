@@ -227,23 +227,48 @@ func (a *Archive) Extract(dst string) error {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}
-	for name, f := range a.byName {
-		target := filepath.Join(dst, filepath.FromSlash(name))
-		if err := confinedTo(dst, target); err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		data, err := a.readMember(f, MaxArchiveSize)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(target, data, 0o644); err != nil {
+	for name := range a.byName {
+		if err := a.extractMember(dst, name); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (a *Archive) extractMember(dst, name string) error {
+	target := filepath.Join(dst, filepath.FromSlash(name))
+	if err := confinedTo(dst, target); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	data, err := a.readMember(a.byName[name], MaxArchiveSize)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(target, data, 0o644)
+}
+
+// ExtractTextModels copies verified textual model members into a fresh directory.
+func (a *Archive) ExtractTextModels(dst string) ([]string, error) {
+	names, err := TextModelMembers(a.Members)
+	if err != nil {
+		return nil, err
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("%s: archive contains no textual model files", a.Path)
+	}
+	if err := os.Mkdir(dst, 0o700); err != nil {
+		return nil, err
+	}
+	for i, name := range names {
+		if err := a.extractMember(dst, name); err != nil {
+			return nil, err
+		}
+		names[i] = filepath.Join(dst, filepath.FromSlash(name))
+	}
+	return names, nil
 }
 
 // normalizeMemberPath validates a ZIP member name: relative, "/"-separated,
