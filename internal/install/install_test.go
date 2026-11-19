@@ -580,12 +580,8 @@ func tamper(t *testing.T, kpar string) string {
 	}
 	defer a.Close()
 	dir := t.TempDir()
-	if err := a.Extract(filepath.Join(dir, "x")); err != nil {
-		t.Fatal(err)
-	}
-	write(t, dir, "x/Tools.sysml", "package Evil;\n")
 	meta := a.Meta.Marshal()
-	// Bundle regenerates meta, so assemble by hand: bundle, then overwrite .meta.json member via Extract+zip is long; instead write a raw zip.
+	// Bundle regenerates meta, so write a raw zip that keeps the original.
 	out := filepath.Join(dir, "bad.kpar")
 	writeRawZip(t, out, map[string][]byte{
 		".project.json": a.Project.Marshal(),

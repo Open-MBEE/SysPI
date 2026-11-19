@@ -219,22 +219,6 @@ func (a *Archive) readMember(f *zip.File, limit int64) ([]byte, error) {
 	return data, nil
 }
 
-// Extract writes the archive's members into dst, which must not exist.
-func (a *Archive) Extract(dst string) error {
-	if _, err := os.Lstat(dst); err == nil {
-		return fmt.Errorf("%s already exists", dst)
-	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return err
-	}
-	for name := range a.byName {
-		if err := a.extractMember(dst, name); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (a *Archive) extractMember(dst, name string) error {
 	target := filepath.Join(dst, filepath.FromSlash(name))
 	if err := confinedTo(dst, target); err != nil {

@@ -101,7 +101,8 @@ hg commit, so two builds of the same tree are byte-identical.
 For a release that needs a complete KPAR model index, pass
 `syspi bundle -index index.json` a JSON object mapping each top-level name
 and short name to its archive-relative model file. SysPI checks the file
-paths. The built-in fallback only indexes textual package declarations.
+paths. See [model indexes](docs/packages.md#model-index-from-an-exporter) for
+how to supply a map.
 
 `syspi dependency-sources` exports verified textual dependencies as JSON for
 editors. It includes both `.sysml` and `.kerml` members, follows dependencies

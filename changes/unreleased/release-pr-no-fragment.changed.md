@@ -1,0 +1,1 @@
+- The changelog-fragment check skips a release pull request into `main`, whose fragments the release commit has already folded into `CHANGELOG.md`.

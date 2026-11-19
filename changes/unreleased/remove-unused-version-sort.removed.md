@@ -1,0 +1,1 @@
+- The unused `version.Sort` helper; nothing in the module called it.
