@@ -219,33 +219,6 @@ func (a *Archive) readMember(f *zip.File, limit int64) ([]byte, error) {
 	return data, nil
 }
 
-// Extract writes the archive's members into dst, which must not exist.
-func (a *Archive) Extract(dst string) error {
-	if _, err := os.Lstat(dst); err == nil {
-		return fmt.Errorf("%s already exists", dst)
-	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return err
-	}
-	for name, f := range a.byName {
-		target := filepath.Join(dst, filepath.FromSlash(name))
-		if err := confinedTo(dst, target); err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		data, err := a.readMember(f, MaxArchiveSize)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(target, data, 0o644); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // normalizeMemberPath validates a ZIP member name: relative, "/"-separated,
 // no "." or ".." segments, no backslashes or NULs. It returns "" for a
 // directory entry.
@@ -272,40 +245,6 @@ func normalizeMemberPath(name string) (string, error) {
 		return "", nil
 	}
 	return path.Clean(trimmed), nil
-}
-
-// confinedTo reports an error unless target is within root (no symlink in
-// an existing prefix may lead outside).
-func confinedTo(root, target string) error {
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return err
-	}
-	absRoot, err = filepath.EvalSymlinks(absRoot)
-	if err != nil {
-		return err
-	}
-	// Resolve the deepest existing prefix of target.
-	probe := target
-	for {
-		if _, err := os.Lstat(probe); err == nil {
-			break
-		}
-		parent := filepath.Dir(probe)
-		if parent == probe {
-			break
-		}
-		probe = parent
-	}
-	resolved, err := filepath.EvalSymlinks(probe)
-	if err != nil {
-		return err
-	}
-	rel, err := filepath.Rel(absRoot, resolved)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("%s escapes %s", target, root)
-	}
-	return nil
 }
 
 // Bundle writes the project directory as a deterministic .kpar: members

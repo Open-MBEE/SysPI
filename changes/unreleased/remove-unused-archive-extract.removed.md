@@ -1,0 +1,1 @@
+- The unused `Archive.Extract` and its `confinedTo` helper: archives are installed as `.kpar` files and read in place, so nothing but tests unpacked one.

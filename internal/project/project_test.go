@@ -178,23 +178,6 @@ func TestBundleDeterministicAndOpen(t *testing.T) {
 	if _, ok := a.Meta.Checksum["lib/other_1.0.0/.project.json"]; ok {
 		t.Fatal("lib/ bundled")
 	}
-	dst := filepath.Join(t.TempDir(), "x")
-	if err := a.Extract(dst); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(dst, "sub", "Extra.kerml")); err != nil {
-		t.Fatal(err)
-	}
-	m, ok, err := ReadMeta(dst)
-	if err != nil || !ok {
-		t.Fatal(err)
-	}
-	if _, err := VerifyChecksums(dst, m); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Extract(dst); err == nil {
-		t.Fatal("extract over existing accepted")
-	}
 }
 
 func TestOpenArchiveLegacyChecksums(t *testing.T) {
