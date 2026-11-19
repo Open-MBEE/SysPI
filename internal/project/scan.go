@@ -237,8 +237,11 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// skipQualifiedName returns the index after NAME ( '::' NAME )* starting at i.
+// skipQualifiedName returns the index after ( '$' '::' )? NAME ( '::' NAME )* starting at i.
 func skipQualifiedName(toks []token, i int) int {
+	if i+1 < len(toks) && toks[i] == (token{tokSymbol, "$"}) && toks[i+1] == (token{tokSymbol, "::"}) {
+		i += 2
+	}
 	for i < len(toks) && toks[i].kind != tokSymbol {
 		i++
 		if i >= len(toks) || toks[i] != (token{tokSymbol, "::"}) {

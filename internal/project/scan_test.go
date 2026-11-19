@@ -26,6 +26,7 @@ func TestTopLevelNames(t *testing.T) {
 		{"sysml definitions", "a.sysml", "part def <p> Part :> Base { part inner; }\nabstract use case def 'Use It';\nenum def Colour { red; }", []string{"p", "Part", "Use It", "Colour"}},
 		{"sysml usages", "a.sysml", "part wheel : Wheel[4];\nref item <i> thing;\nx : Real = 1;", []string{"wheel", "i", "thing", "x"}},
 		{"prefix metadata", "a.sysml", "#Safety::critical part def Brake;\n#fmea def Mode;", []string{"Brake", "Mode"}},
+		{"globally qualified prefix metadata", "a.sysml", "#$::Safety::critical part def Brake;", []string{"Brake"}},
 		{"two declarations on one line", "a.sysml", "package A; package B { } package C;", []string{"A", "B", "C"}},
 		{"declaration after a closing brace", "a.sysml", "package A {\n  part def X;\n} package B;", []string{"A", "B"}},
 		{"declaration split over lines", "a.sysml", "package\n  <a>\n  A\n{\n}", []string{"a", "A"}},
