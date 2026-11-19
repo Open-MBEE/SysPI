@@ -165,9 +165,8 @@ func isAnnotation(head []token) bool {
 	return false
 }
 
-// declaredNames reads the Identification of one root member from the tokens
-// before its body: ( '<' shortName '>' )? name?, after its keywords and
-// prefix metadata.
+// declaredNames reads the Identification of one root member, after its keywords
+// and prefix metadata, from the tokens before its body.
 func (n *notation) declaredNames(head []token) []string {
 	i, last := 0, ""
 	for i < len(head) {
