@@ -308,8 +308,31 @@ whose keys are top-level model names and short names and whose values are
 archive-relative paths. For example, `{"Vehicle":"models/vehicles.sysml","v":"models/vehicles.sysml"}`.
 SysPI checks that every entry points to a model file in the bundle and omits the
 index input file from the archive. A model-aware exporter must establish that the
-names and short names are complete. Without `-index`, SysPI uses its textual
-package scanner.
+names and short names are complete.
+
+### Model index from the textual scanner
+
+Without `-index`, SysPI builds the index itself from the `.sysml` and `.kerml` members; `.json`
+and `.xmi` members are not read. KerML 1.1 Table 13, Note 1 asks for the non-null names and
+short names of the top-level elements of each root namespace, so for every declaration at the
+root of a file the scanner records `<shortName>` and the name that follow its keywords:
+`package <v> Vehicle`, `namespace N`, `part def <p> 'Power Train'`, `class C`, `attribute x`,
+whatever the visibility. Escape sequences in a quoted name are resolved. When two files declare
+the same name, the path that sorts first is recorded.
+
+The scanner is lexical, not a parser, and never runs another tool. It skips notes, comments
+and string values, tracks braces to find the root, and knows the reserved keywords of each
+notation. That leaves these limits:
+
+- Names an `alias` or a public `import` adds to the global scope are not indexed.
+- A file with syntax errors is not diagnosed and may yield wrong or missing names.
+- A usage introduced by `perform`, `exhibit`, `include`, `assert`, `satisfy` or `event` is
+  indexed only when its own keyword follows (`perform action a`); any other keyword that
+  cannot start a root declaration ends the scan of that declaration.
+- Letters outside `a`-`z` and `A`-`Z` are accepted in an unquoted name, which the notation
+  does not allow.
+
+Use `-index` with an exporter-built index when a package needs more than that.
 
 ### Publish a KPAR
 
