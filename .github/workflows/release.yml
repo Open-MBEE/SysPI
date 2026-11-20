@@ -42,20 +42,7 @@ jobs:
       - name: Install mercurial and subversion (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          # The community feed answers 503/504 now and then, and choco exits 0 when a package it could not
-          # even fetch is left out; install one at a time and trust only the binary on disk.
-          $tools = @{ hg = 'C:\Program Files\Mercurial\hg.exe'; sliksvn = 'C:\Program Files\SlikSvn\bin\svn.exe' }
-          foreach ($pkg in $tools.Keys | Sort-Object) {
-            for ($attempt = 1; $attempt -le 3; $attempt++) {
-              choco install -y --no-progress $pkg
-              if ($LASTEXITCODE -eq 0 -and (Test-Path $tools[$pkg])) { break }
-              if ($attempt -eq 3) { throw "choco install $pkg failed $attempt times (last exit code $LASTEXITCODE)" }
-              Start-Sleep -Seconds (30 * $attempt)
-            }
-          }
-          Add-Content $env:GITHUB_PATH 'C:\Program Files\Mercurial'
-          Add-Content $env:GITHUB_PATH 'C:\Program Files\SlikSvn\bin'
+        run: ./scripts/setup-windows-vcs.ps1
       - name: Versions
         run: go version && git --version && hg --version | head -1 && svn --version --quiet
       - name: Build
@@ -101,7 +88,8 @@ jobs:
           cd dist
           repeated=$(awk '{ print $2 }' SHA256SUMS.txt | sort | uniq -d)
           [[ -z "$repeated" ]] || { echo "::error::SHA256SUMS.txt lists more than once: $repeated"; exit 1; }
-          [[ $(wc -l < SHA256SUMS.txt) -eq 6 ]] || { echo "::error::SHA256SUMS.txt lists $(wc -l < SHA256SUMS.txt) assets, not 6"; exit 1; }
+          [[ $(wc -l < SHA256SUMS.txt) -eq 7 ]] || { echo "::error::SHA256SUMS.txt must list six native archives and one WASI binary"; exit 1; }
+          grep -Eq '^[0-9a-f]{64}  syspi-wasip1-wasm\.wasm$' SHA256SUMS.txt
           sha256sum --check --strict SHA256SUMS.txt
 
       - name: Install cosign

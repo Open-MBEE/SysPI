@@ -44,6 +44,7 @@ Commands:
   verify    check every installed copy under lib/ against the lock; exit 1 on a discrepancy
   list      print the locked packages and whether each installed copy is present
   bundle    build a deterministic .kpar from a project directory
+  dependency-sources  print verified dependency model sources as JSON
   publish   verify and upload a .kpar to an HTTPS artifact registry
   version   print the version
 
@@ -94,6 +95,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdList(args[1:], stdout, stderr)
 	case "bundle":
 		err = cmdBundle(ctx, args[1:], stdout, stderr)
+	case "dependency-sources":
+		err = cmdDependencySources(args[1:], stdout, stderr)
 	case "publish":
 		err = cmdPublish(ctx, args[1:], stdout, stderr)
 	case "version", "-version", "--version":

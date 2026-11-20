@@ -1,0 +1,1 @@
+- Provision Mercurial and Subversion in Windows CI from pinned upstream MSIs and verify the extracted executables before running the VCS tests.

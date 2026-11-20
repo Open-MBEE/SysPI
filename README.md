@@ -76,7 +76,7 @@ syspi install | sync                                          resolve .project.j
 syspi lock                                                    write .project.lock.json without installing
 syspi verify                                                  check lib/ against the lock, offline; exit 1 on any discrepancy, write nothing
 syspi list [-json]                                            the locked packages, where each is in lib/ and whether it is present
-syspi bundle [-o out.kpar] [-tag T] [-index index.json] <dir> deterministic .kpar with optional model index from an exporter
+syspi bundle [-o out.kpar] [-tag T] [-index index.json] <dir>
 syspi publish <archive.kpar> <https-url.kpar>               verify and upload to a conditional PUT artifact host
 ```
 
@@ -95,6 +95,19 @@ $ sysml -validate Rover.sysml   # OpenSysML reads lib/ on its own; no flags
 
 `bundle` takes its `created` timestamp from `SOURCE_DATE_EPOCH`, else from the checked-out git or
 hg commit, so two builds of the same tree are byte-identical.
+
+## Model indexes and dependency sources
+
+For a release that needs a complete KPAR model index, pass
+`syspi bundle -index index.json` a JSON object mapping each top-level name
+and short name to its archive-relative model file. SysPI checks the file
+paths. See [model indexes](docs/packages.md#model-index-from-an-exporter) for
+how to supply a map.
+
+`syspi dependency-sources` exports verified textual dependencies as JSON for
+editors. It includes both `.sysml` and `.kerml` members, follows dependencies
+declared by metadata-only packages, and emits a shared installed copy once.
+Consumers can analyze these sources with their chosen model tools.
 
 ## Install
 

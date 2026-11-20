@@ -219,6 +219,39 @@ func (a *Archive) readMember(f *zip.File, limit int64) ([]byte, error) {
 	return data, nil
 }
 
+func (a *Archive) extractMember(dst, name string) error {
+	target := filepath.Join(dst, filepath.FromSlash(name))
+	if err := confinedTo(dst, target); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	data, err := a.readMember(a.byName[name], MaxArchiveSize)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(target, data, 0o644)
+}
+
+// ExtractTextModels copies verified textual model members into a fresh directory.
+func (a *Archive) ExtractTextModels(dst string) ([]string, error) {
+	names := TextModelMembers(a.Members)
+	if len(names) == 0 {
+		return nil, nil
+	}
+	if err := os.Mkdir(dst, 0o700); err != nil {
+		return nil, err
+	}
+	for i, name := range names {
+		if err := a.extractMember(dst, name); err != nil {
+			return nil, err
+		}
+		names[i] = filepath.Join(dst, filepath.FromSlash(name))
+	}
+	return names, nil
+}
+
 // normalizeMemberPath validates a ZIP member name: relative, "/"-separated,
 // no "." or ".." segments, no backslashes or NULs. It returns "" for a
 // directory entry.
@@ -245,6 +278,40 @@ func normalizeMemberPath(name string) (string, error) {
 		return "", nil
 	}
 	return path.Clean(trimmed), nil
+}
+
+// confinedTo reports an error unless target is within root (no symlink in
+// an existing prefix may lead outside).
+func confinedTo(root, target string) error {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	absRoot, err = filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		return err
+	}
+	// Resolve the deepest existing prefix of target.
+	probe := target
+	for {
+		if _, err := os.Lstat(probe); err == nil {
+			break
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			break
+		}
+		probe = parent
+	}
+	resolved, err := filepath.EvalSymlinks(probe)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(absRoot, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%s escapes %s", target, root)
+	}
+	return nil
 }
 
 // Bundle writes the project directory as a deterministic .kpar: members

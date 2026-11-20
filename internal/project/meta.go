@@ -176,6 +176,18 @@ func IsModelFile(rel string) bool {
 	return modelExts[strings.ToLower(filepath.Ext(base))]
 }
 
+// TextModelMembers selects textual SysML and KerML members in their input order.
+func TextModelMembers(members []string) []string {
+	var names []string
+	for _, member := range members {
+		ext := strings.ToLower(filepath.Ext(member))
+		if ext == ".sysml" || ext == ".kerml" {
+			names = append(names, member)
+		}
+	}
+	return names
+}
+
 // Members lists the files of a project directory relative to it with "/"
 // separators, sorted, excluding version-control metadata, the lock file and
 // the given skip paths.
